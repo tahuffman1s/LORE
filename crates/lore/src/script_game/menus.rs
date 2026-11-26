@@ -1879,7 +1879,8 @@ fn the_controls_tab_follows_the_device_the_player_uses() {
     played.go_to("Open map");
     assert_eq!(played.value_of("Open map"), "F1");
     played.tap(GamepadButton::DpadDown);
-    assert_eq!(played.value_of("Open map"), "View");
+    // Select is the standard "switch_view" button too, which the page says.
+    assert_eq!(played.value_of("Open map"), "View  (also Switch view)");
     played.tap(Key::ArrowDown);
     assert_eq!(played.value_of("Open map"), "F1");
 }
@@ -1981,7 +1982,7 @@ fn a_direction_takes_a_key_for_each_way_in_turn_on_a_keyboard() {
     );
     played.tap(Key::L);
     assert_eq!(played.bound("move"), "LeftStick,I/K/J/L");
-    assert_eq!(played.page_value("Move"), "I J K L");
+    assert_eq!(played.page_value("Move"), "I J K L  (also Ride)");
 
     // One direction takes two: the way that lessens, then the way that adds.
     played.press_row("Lean");
@@ -2042,6 +2043,25 @@ fn the_page_says_when_a_button_is_used_twice_and_marks_both_rows() {
     played.step();
     assert!(!played.words().iter().any(|text| text.contains("also used")));
     assert_eq!(played.page_value("Open map"), "F9");
+}
+
+#[test]
+fn every_clash_that_stands_is_marked_but_not_the_pairs_the_engine_shares() {
+    let main = format!(
+        "{}\ngame.input.bind(\"wave\", {{ \"M\", \"LeftBumper\" }})",
+        bindings_game()
+    );
+    let mut played = Played::on_bindings_page(&main);
+    // Nothing was rebound on the page: the clash is there from the start.
+    assert_eq!(played.page_value("Wave"), "M  (also Map)");
+    assert_eq!(played.page_value("Map"), "M  (also Wave)");
+    // Aim and Block share right click on purpose.
+    assert_eq!(played.page_value("Aim"), "Right click");
+    assert_eq!(played.page_value("Block"), "Right click");
+    // The keyboard's clash is not on the gamepad's view.
+    played.go_to("Wave");
+    played.tap(GamepadButton::DpadDown);
+    assert_eq!(played.value_of("Wave"), "LB  (also Lock on)");
 }
 
 #[test]

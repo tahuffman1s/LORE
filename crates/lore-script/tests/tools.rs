@@ -1550,16 +1550,6 @@ fn rebind_is_read_back_at_once_and_asked_of_the_engine() {
 
 #[test]
 fn rebind_refuses_what_bind_refuses_in_words_for_rebind() {
-    let gamepad = refusal(r#"game.input.rebind("jump", { "F" })"#);
-    assert!(
-        gamepad.contains("game.input.rebind(\"jump\", ...) needs a gamepad button"),
-        "{gamepad}"
-    );
-    let keyboard = refusal(r#"game.input.rebind("jump", { "GamepadSouth" })"#);
-    assert!(
-        keyboard.contains("needs a keyboard or mouse button"),
-        "{keyboard}"
-    );
     let kind = refusal(r#"game.input.rebind("jump", { "WASD", "LeftStick" })"#);
     assert!(
         kind.contains("\"jump\" is a button but the buttons you gave moves in two directions"),
@@ -1591,10 +1581,70 @@ fn rebind_refuses_what_bind_refuses_in_words_for_rebind() {
 }
 
 #[test]
+fn rebind_with_one_device_keeps_the_other_and_both_devices_replace_all() {
+    let mut host = game(
+        r#"game.input.bind("open_map", { "F1", "LeftBumper" })
+        local step = 0
+        game.onTick(function()
+            step += 1
+            if step == 1 then
+                game.input.rebind("jump", { "F" })
+            elseif step == 2 then
+                game.input.rebind("jump", { "GamepadNorth" })
+            elseif step == 3 then
+                game.input.rebind("jump", { "G", "GamepadWest" })
+            elseif step == 4 then
+                game.input.rebind("move", { "ArrowKeys" })
+            elseif step == 5 then
+                game.input.rebind("move", { "RightStick" })
+            elseif step == 6 then
+                game.input.rebind("open_map", { "F1" })
+            end
+            print(table.concat(game.input.bindings("jump"), ",") .. "|" .. table.concat(game.input.bindings("move"), ",") .. "|" .. table.concat(game.input.bindings("open_map"), ","))
+        end)"#,
+    );
+    run(&mut host, 6);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        printed(),
+        [
+            "GamepadSouth,F|WASD,LeftStick|F1,LeftBumper",
+            "F,GamepadNorth|WASD,LeftStick|F1,LeftBumper",
+            "G,GamepadWest|WASD,LeftStick|F1,LeftBumper",
+            "G,GamepadWest|LeftStick,ArrowKeys|F1,LeftBumper",
+            "G,GamepadWest|ArrowKeys,RightStick|F1,LeftBumper",
+            "G,GamepadWest|ArrowKeys,RightStick|F1,LeftBumper",
+        ]
+    );
+    let asks = host.take_binding_asks();
+    assert_eq!(
+        asks[0],
+        BindingAsk::Set {
+            action: "jump".into(),
+            buttons: vec!["GamepadSouth".into(), "F".into()]
+        }
+    );
+}
+
+#[test]
+fn a_button_another_action_uses_is_allowed_and_both_hear_it() {
+    let mut host = game(
+        r#"game.onTick(function()
+            game.input.rebind("jump", { "E" })
+            print(table.concat(game.input.usedBy("E"), ","))
+        end)"#,
+    );
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let used = printed().pop().unwrap_or_default();
+    assert!(used.contains("jump") && used.contains(','), "{used}");
+}
+
+#[test]
 fn a_refused_rebind_changes_and_asks_nothing() {
     let mut host = game(
         r#"game.onTick(function()
-            pcall(game.input.rebind, "jump", { "F" })
+            pcall(game.input.rebind, "jump", { "WASD" })
             print(table.concat(game.input.bindings("jump"), ","))
         end)"#,
     );

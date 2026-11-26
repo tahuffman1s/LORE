@@ -3540,8 +3540,10 @@ declare game: {
         --- The x and y of a two-direction action, "move" or "look", each from
         --- -1 to 1. Right and up are positive. An action with one direction
         --- (made with `bind`, such as { "A/D", "LeftStickX" }) gives its
-        --- number as x and 0 as y. A button is read with `pressed`.
+        --- number as x and 0 as y. On a button action it stops with an error
+        --- that says to use `pressed`.
         --- Example: local x, y = game.input.axis("move")
+        --- Example: local steer = game.input.axis("steer") -- one direction: x only
         axis: (action: string) -> (number, number),
 
         --- How far the mouse moved since the last tick, for an action the
@@ -3609,6 +3611,8 @@ declare game: {
         --- "WASD", "ArrowKeys", "LeftStick", "Dpad" and "MouseMotion" are two
         --- directions; "A/D", "LeftStickX" and a pair such as
         --- "LeftBumper/RightBumper" are one (the first button pushes toward -1).
+        --- Pairs: "A/D" means A pushes toward -1 (left), D toward +1 (right).
+        --- Four: "I/K/J/L" is up, down, left, right.
         --- An action is buttons only or directions only, and still needs a
         --- keyboard or mouse binding and a gamepad binding.
         --- Example: game.input.bind("ride", { "WASD", "LeftStick" }, { set = "riding" })
@@ -3650,12 +3654,19 @@ declare game: {
         --- it starts, and `bindings` gives them from the next tick. Call it
         --- whenever you like, such as from a menu row's `onPress`. The
         --- buttons are written as `bind` takes them and must be all of the
-        --- kind the action is (buttons, or directions like "WASD"), with
-        --- at least one for keyboard or mouse and one for a gamepad. The
-        --- player is told on screen what changed. See `listenForButton` for
-        --- hearing which button they want.
-        --- Example: game.input.rebind("jump", { "F", "GamepadSouth" })
-        --- Example: game.input.rebind("move", { "ArrowKeys", "LeftStick" })
+        --- kind the action is (buttons, or directions like "WASD"). Give
+        --- buttons of one device (all keyboard and mouse, or all gamepad)
+        --- and only that device's buttons are replaced: the other device's
+        --- are kept. Give both and the whole list is replaced. Either way
+        --- the action ends with at least one for keyboard or mouse and one
+        --- for a gamepad. A button another action already uses is allowed,
+        --- and both actions then hear it; `usedBy` tells you who has it.
+        --- The player is told on screen what changed. See `listenForButton`
+        --- for hearing which button they want. Rebinding is the player's
+        --- choice: call it from a menu, not at the top of main.luau.
+        --- Example: game.input.rebind("jump", { "F" }) -- keeps the gamepad's A
+        --- Example: game.input.rebind("move", { "ArrowKeys" }) -- keeps LeftStick
+        --- Example: game.input.rebind("jump", { "F", "GamepadSouth" }) -- both: replaces all
         rebind: (action: string, buttons: { string }) -> (),
 
         --- Puts the buttons of one action back to what the engine and your
@@ -3668,20 +3679,20 @@ declare game: {
         --- Example: game.input.resetBindings()
         resetBindings: (action: string?) -> (),
 
-        --- Waits for the player to press a button and calls `handler` once,
-        --- on a tick, with its name as `bind` takes it: "Space",
-        --- "MouseLeft", "MouseWheelUp", "GamepadSouth", "LeftBumper",
-        --- "DpadUp". While it waits every action reads as let go, so the
-        --- press does nothing else, and a button already held is not heard
-        --- until it is let go and pressed again. `handler` gets nil when
-        --- the player cancels (Escape on the keyboard, Start on a gamepad:
-        --- neither is ever heard as a button), when `seconds` pass (5 if
-        --- not given; it must be more than 0), when `stopListening` is
-        --- called, or when another `listenForButton` replaces this one, so
-        --- a page always hears how it ended. `device = "keyboard"` hears
-        --- keys and the mouse only, `"gamepad"` only the gamepad; leave it
-        --- out to hear both. Sticks are not buttons and are not heard.
-        --- Example: game.input.listenForButton(function(button) if button then game.input.rebind("jump", { button, "GamepadSouth" }) end end, { device = "keyboard" })
+        --- Example: game.input.listenForButton(function(button) if button then game.input.rebind("jump", { button }) end end, { device = "keyboard" })
+        --- The handler gets nil if the player cancels (Escape or Start) or
+        --- nothing is pressed in time. Otherwise it gets the button's name as
+        --- `bind` takes it: "Space", "MouseLeft", "MouseWheelUp",
+        --- "GamepadSouth", "LeftBumper", "DpadUp". It is called once, on a
+        --- tick. While it waits every action reads as let go, so the press
+        --- does nothing else, and a button already held is not heard until it
+        --- is let go and pressed again. Escape and Start are never heard as
+        --- buttons. `seconds` is 5 if not given and must be more than 0.
+        --- The handler also gets nil when `stopListening` is called or another
+        --- `listenForButton` replaces this one, so a page always hears how it
+        --- ended. `device = "keyboard"` hears keys and the mouse only,
+        --- `"gamepad"` only the gamepad; leave it out to hear both. Sticks
+        --- are not buttons and are not heard.
         listenForButton: (handler: (button: string?) -> (), options: { device: ("keyboard" | "gamepad")?, seconds: number? }?) -> (),
 
         --- Stops waiting for a button. The handler of `listenForButton`
@@ -3702,6 +3713,7 @@ declare game: {
         --- Sticks and directions are named too ("LeftStick", "WASD"). Gives
         --- an empty list when nothing uses it.
         --- Example: print(table.concat(game.input.usedBy("Space"), ", "))
+        --- Example: game.input.usedBy("W") -- { "move" }
         usedBy: (button: string) -> { string },
 
         --- Where the pointer is, in pixels on a screen 1080 high, from the
@@ -4003,7 +4015,9 @@ declare game: {
         --- Leaves one action out of the buttons on the Controls tab, such as one the
         --- player should not move. The name is checked when the page is
         --- built, so it can be said before the game's own actions are made.
-        --- A name that is no action is told in the log, with the line.
+        --- A name that is no action only writes a line to the log, with the
+        --- line, because the page is built later, when the menu first opens,
+        --- after all of the game's actions exist.
         --- Example: game.pauseMenu.hideControl("melee")
         hideControl: (action: string) -> (),
     },

@@ -185,9 +185,18 @@ local busy: { name: string, words: string }? = nil
 local note: string? = nil
 -- The button an action was just given, to say if something else has it too.
 local watch: { name: string, button: string }? = nil
--- Rows with a button that another action of theirs also has, and who.
-local clashed: { [string]: string } = {}
+-- Rows with a button on the device shown that another action heard in the
+-- same set also has, and who. Worked out again only when bindings change,
+-- the device switches or a button was just given (`clashDirty` and the two
+-- that follow it say when).
+local clashed: { [string]: { string } } = {}
 local clashLine: string? = nil
+local clashDirty = true
+local clashDevice = ""
+local clashWatch: { name: string, button: string }? = nil
+-- Pairs the engine's own controls share a button on purpose (aim and block,
+-- crouch and dodge): not marked, as they are not a mistake.
+local SHARED = { aim = "block", block = "aim", crouch = "dodge", dodge = "crouch" }
 -- The sets (other than the menu's) each action is heard in.
 local setsOf: { [string]: { [string]: boolean } } = {}
 
@@ -227,19 +236,9 @@ local function kindOf(name: string): string
     return "button"
 end
 
--- What the action is bound to, less what it has on `on`.
-local function otherDevice(name: string, on: string): { string }
-    local kept = {}
-    for _, binding in game.input.bindings(name) do
-        if onPad(binding) ~= (on == "gamepad") then
-            table.insert(kept, binding)
-        end
-    end
-    return kept
-end
-
 -- Rebinds, and says why when the engine will not.
 local function apply(name: string, bindings: { string }): boolean
+    clashDirty = true
     local ok, problem = pcall(game.input.rebind, name, bindings)
     if not ok then
         local said = tostring(problem)
@@ -261,9 +260,7 @@ local function listenFor(name: string, on: string)
         if button == nil then
             return
         end
-        local bindings = otherDevice(name, on)
-        table.insert(bindings, button)
-        if apply(name, bindings) then
+        if apply(name, { button }) then
             watch = { name = name, button = button }
         end
     end, { device = on, seconds = 10 })
@@ -290,9 +287,7 @@ local function listenForDirections(name: string, kind: string)
                 return
             end
             busy = nil
-            local bindings = otherDevice(name, "keyboard")
-            table.insert(bindings, table.concat(keys, "/"))
-            apply(name, bindings)
+            apply(name, { table.concat(keys, "/") })
         end, { device = "keyboard", seconds = 10 })
     end
     ask()
@@ -315,9 +310,7 @@ local function pressControl(name: string)
         end
         local sticks = STICKS[kind]
         local at = if current then table.find(sticks, current) else nil
-        local bindings = otherDevice(name, "gamepad")
-        table.insert(bindings, sticks[(at or 0) % #sticks + 1])
-        apply(name, bindings)
+        apply(name, { sticks[(at or 0) % #sticks + 1] })
     else
         for _, binding in game.input.bindings(name) do
             if not onPad(binding) and string.lower(binding) == "mousemotion" then
@@ -329,33 +322,43 @@ local function pressControl(name: string)
     end
 end
 
--- Works out which rows share a button with another action heard in the same
--- set, once for each picture.
+-- Works out which rows share a button on the device shown with another
+-- action heard in the same set, when something changed since last time.
 local function refreshClash()
-    table.clear(clashed)
-    clashLine = nil
-    local watched = watch
-    if not watched then
+    local on = device()
+    if not clashDirty and clashDevice == on and clashWatch == watch then
         return
     end
-    local mine = setsOf[watched.name]
-    local others: { string } = {}
-    for _, other in game.input.usedBy(watched.button) do
-        local theirs = setsOf[other]
-        if other ~= watched.name and mine and theirs then
-            for set in mine do
-                if theirs[set] then
-                    table.insert(others, nice(other))
-                    local before = clashed[other]
-                    clashed[other] = if before then before .. ", " .. nice(watched.name) else nice(watched.name)
-                    break
+    clashDirty, clashDevice, clashWatch = false, on, watch
+    table.clear(clashed)
+    clashLine = nil
+    for name, mine in setsOf do
+        local found: { string } = {}
+        local seen: { [string]: boolean } = {}
+        for _, binding in game.input.bindings(name) do
+            if onPad(binding) == (on == "gamepad") then
+                for _, other in game.input.usedBy(binding) do
+                    local theirs = setsOf[other]
+                    if other ~= name and theirs and not seen[other] and SHARED[name] ~= other then
+                        for set in mine do
+                            if theirs[set] then
+                                seen[other] = true
+                                table.insert(found, nice(other))
+                                break
+                            end
+                        end
+                    end
                 end
             end
         end
+        if #found > 0 then
+            clashed[name] = found
+        end
     end
-    if #others > 0 then
-        clashed[watched.name] = table.concat(others, ", ")
-        clashLine = string.format("%s is also used by %s", game.input.label(watched.name, device()), table.concat(others, " and "))
+    local watched = watch
+    local others = if watched then clashed[watched.name] else nil
+    if watched and others then
+        clashLine = string.format("%s is also used by %s", game.input.label(watched.name, on), table.concat(others, " and "))
     end
 end
 
@@ -373,8 +376,9 @@ local function controlRow(name: string): Row
             if words == "" then
                 words = "not set"
             end
+            refreshClash()
             local also = clashed[name]
-            return if also then words .. "  (also " .. also .. ")" else words
+            return if also then words .. "  (also " .. table.concat(also, ", ") .. ")" else words
         end,
     })
 end
@@ -515,6 +519,7 @@ local function build()
                     if withButtons then
                         game.input.stopListening()
                         busy, watch = nil, nil
+                        clashDirty = true
                         game.input.resetBindings()
                         note = "Every control is back to the defaults"
                     end
@@ -605,6 +610,7 @@ function methods.open()
     open = true
     resumes = not game.paused()
     note, watch = nil, nil
+    clashDirty = true
     game.pause()
     -- A rumble that was playing would shake a hand that is now reading.
     game.input.rumble(0, 0)

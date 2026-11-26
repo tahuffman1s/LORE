@@ -273,6 +273,26 @@ pub(crate) fn install(lua: &mlua::Lua, shared: &Rc<Shared>, input: &Table) -> ml
                     ),
                 ));
             }
+            // Buttons of one device replace that device's and keep the other's.
+            let given = parsed(&buttons);
+            let pads = given.iter().filter(|b| b.is_gamepad()).count();
+            let buttons = if pads == 0 || pads == given.len() {
+                let on_pad = pads > 0;
+                let kept: Vec<String> = state.tools.with_controls(|controls| {
+                    let map = controls
+                        .filter(|map| map.action(&name).is_ok())
+                        .unwrap_or(&own);
+                    let id = map.action(&name).unwrap_or(id);
+                    map.bindings(id)
+                        .iter()
+                        .filter(|b| b.is_gamepad() != on_pad)
+                        .map(ToString::to_string)
+                        .collect()
+                });
+                kept.into_iter().chain(buttons).collect()
+            } else {
+                buttons
+            };
             if let Some(gap) = device_gap("rebind", &name, kind, &buttons) {
                 return Err(fail(lua, gap));
             }
