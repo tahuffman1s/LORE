@@ -3299,8 +3299,9 @@ declare game: {
     ---
     --- Music goes in `sounds/music`, as Ogg Vorbis: `sounds/music/theme.ogg`
     --- is "music/theme". The sounds in that folder, and a sound called
-    --- "music", follow the player's music volume (see `game.settings`); every
-    --- other sound follows their effects volume. Music can be as long as you
+    --- "music", follow the player's music volume (see `game.settings`); the
+    --- sounds in `sounds/speech` (voice lines: "speech/greeting") follow
+    --- their speech volume; every other sound follows their effects volume. Music can be as long as you
     --- like if it is Ogg Vorbis: a file longer than ten seconds is read a
     --- little at a time as it plays. A WAV file is held in memory whole, so
     --- export long sounds as Ogg Vorbis.
@@ -3878,7 +3879,8 @@ declare game: {
         ---     as fast and an octave higher, 0.5 half as fast. From 0.25 to 4.
         ---   loop: true to start again at the end, until it is stopped.
         --- A volume or pitch outside its range is brought into it.
-        --- A sound in `sounds/music` follows the player's music volume.
+        --- A sound in `sounds/music` follows the player's music volume, and
+        --- one in `sounds/speech` their speech volume.
         --- Example: game.audio.play("gunshot")
         --- Example: local music = game.audio.play("music/theme", { volume = 0.4, loop = true })
         play: (name: string, options: { volume: number?, pitch: number?, loop: boolean? }?) -> Sound,
@@ -4365,8 +4367,8 @@ declare game: {
     --- A change is in force at once, and the engine saves it to the
     --- player's settings file: a script never deals with files.
     ---
-    --- The settings today, by name: "volume", "music_volume" and
-    --- "effects_volume" (0 to 100); "mouse_sensitivity" and
+    --- The settings today, by name: "volume", "music_volume",
+    --- "speech_volume" and "effects_volume" (0 to 100); "mouse_sensitivity" and
     --- "stick_sensitivity" (how fast each turns the view, 0.05 to 5),
     --- "invert_look" (true or false) and "rumble" (0 to 100);
     --- "ui_size" (the HUD and menus, 75 to 150 percent), "field_of_view"

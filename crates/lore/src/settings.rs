@@ -256,8 +256,11 @@ settings! {
     /// How loud music is, from 0 (off) to 100 (full). It is turned down by
     /// `volume` as well.
     music_volume: f32 = 100.0, Shape::Number(Settings::VOLUME), "Sound", "Music volume";
-    /// How loud everything that is not music is, from 0 (off) to 100
-    /// (full). It is turned down by `volume` as well.
+    /// How loud spoken lines are, from 0 (off) to 100 (full). It is turned
+    /// down by `volume` as well.
+    speech_volume: f32 = 100.0, Shape::Number(Settings::VOLUME), "Sound", "Speech volume";
+    /// How loud everything that is not music or speech is, from 0 (off) to
+    /// 100 (full). It is turned down by `volume` as well.
     effects_volume: f32 = 100.0, Shape::Number(Settings::VOLUME), "Sound", "Effects volume";
     /// How fast the mouse turns the view, from 0.05 to 5. At 1 a full turn
     /// is 3142 counts of the mouse: 10 cm at 800 DPI, 20 cm at 400. To
@@ -376,8 +379,8 @@ const OLD_SENSITIVITY: &str = "sensitivity";
 const BRIGHTNESS_STOPS: f32 = 1.5;
 
 impl Settings {
-    /// What [`volume`](Self::volume), [`music_volume`](Self::music_volume)
-    /// and [`effects_volume`](Self::effects_volume) can be.
+    /// What [`volume`](Self::volume), [`music_volume`](Self::music_volume),
+    /// [`speech_volume`](Self::speech_volume) and [`effects_volume`](Self::effects_volume) can be.
     pub const VOLUME: Range = Range {
         lowest: 0.0,
         highest: 100.0,
@@ -451,7 +454,14 @@ impl Settings {
         gain(self.music_volume)
     }
 
-    /// What every sound that is not music is multiplied by on top of
+    /// What spoken lines are multiplied by on top of [`gain`](Self::gain),
+    /// from 0 to 1, squared in the same way.
+    #[must_use]
+    pub fn speech_gain(&self) -> f32 {
+        gain(self.speech_volume)
+    }
+
+    /// What every sound that is neither music nor speech is multiplied by on top of
     /// [`gain`](Self::gain), from 0 to 1, squared in the same way.
     #[must_use]
     pub fn effects_gain(&self) -> f32 {
@@ -1040,6 +1050,7 @@ mod tests {
         let chosen = Settings {
             volume: 35.0,
             music_volume: 0.0,
+            speech_volume: 60.0,
             effects_volume: 80.0,
             mouse_sensitivity: 1.7,
             stick_sensitivity: 0.6,
@@ -1200,7 +1211,7 @@ mod tests {
                 "line 1: `volume` must be a number from 0 to 100. It keeps its usual value, 100.",
                 "line 2: `sensitivity` goes from 0.05 to 5, so 9 was changed to 5.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
-                 `volume`, `music_volume`, `effects_volume`, `mouse_sensitivity`, \
+                 `volume`, `music_volume`, `speech_volume`, `effects_volume`, `mouse_sensitivity`, \
                  `stick_sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `night_brightness`, \
                  `upscaling`, `vsync`, `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce`, \

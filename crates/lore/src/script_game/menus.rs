@@ -325,6 +325,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
         Settings {
             volume: 95.0,
             music_volume: 95.0,
+            speech_volume: 95.0,
             effects_volume: 95.0,
             mouse_sensitivity: chosen.mouse_sensitivity,
             stick_sensitivity: chosen.stick_sensitivity,
