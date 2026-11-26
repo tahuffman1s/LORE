@@ -487,7 +487,7 @@ fn a_label_names_what_the_player_presses_on_the_device_they_use() {
 
     host.set_device(Device::Gamepad, GamepadStyle::PlayStation);
     host.draw(1.0);
-    assert_eq!(hud_text(&host), "Cross|LeftStick");
+    assert_eq!(hud_text(&host), "Cross|Left stick");
 
     // What the player changed is what the label says.
     let mut controls = ActionMap::standard();
@@ -497,6 +497,30 @@ fn a_label_names_what_the_player_presses_on_the_device_they_use() {
     host.set_device(Device::KeyboardAndMouse, GamepadStyle::Xbox);
     host.draw(1.0);
     assert!(hud_text(&host).starts_with("F|"), "{}", hud_text(&host));
+}
+
+#[test]
+fn a_label_can_ask_for_one_device_whichever_the_player_uses() {
+    let mut host = game(
+        r#"local hint = game.hud.text("")
+        game.onDraw(function()
+            hint.text = game.input.label("jump", "keyboard") .. "|" .. game.input.label("jump", "gamepad")
+                .. "|" .. game.input.label("look", "keyboard") .. "|" .. game.input.label("move", "gamepad")
+        end)"#,
+    );
+    run(&mut host, 1);
+    host.set_device(Device::Gamepad, GamepadStyle::PlayStation);
+    host.draw(1.0);
+    assert_eq!(hud_text(&host), "Space|Cross|Mouse|Left stick");
+
+    let mut host = game(r#"game.onDraw(function() game.input.label("jump", "pad") end)"#);
+    run(&mut host, 1);
+    host.draw(1.0);
+    let message = mistake(&host);
+    assert!(
+        message.contains("\"keyboard\" or \"gamepad\"") && message.contains("pad"),
+        "{message}"
+    );
 }
 
 #[test]

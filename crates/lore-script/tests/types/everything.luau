@@ -404,6 +404,7 @@ game.onDraw(function()
     fps.text = math.floor(game.frames.rate()) .. " fps, " .. string.format("%.1f ms", game.frames.lastTime() * 1000)
     fps.text ..= " slowest " .. string.format("%.1f ms", game.frames.slowestTime() * 1000) .. " low " .. game.frames.lowRate()
     hint.text = "Press " .. game.input.label("interact") .. " to open"
+    local padWords: string = game.input.label("interact", "gamepad")
     if slider.pressed then
         slider.value = math.clamp(slider:pointerAt(), 0, 1)
     end
@@ -871,6 +872,9 @@ print(onTop, anyMenuOpen, rowShown, rowWords)
 game.pauseMenu.enabled = true
 game.pauseMenu.title = "Game paused"
 game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = function() print("click") end }))
+game.pauseMenu.controls = false
+local controlsPage: boolean = game.pauseMenu.controls
+game.pauseMenu.hideControl("melee")
 game.pauseMenu.open()
 game.pauseMenu.close()
 game.pauseMenu:open()

@@ -1696,7 +1696,7 @@ pub(crate) fn install_input(lua: &Lua, shared: &Rc<Shared>, input: &Table) -> ml
     let rules = Rc::clone(shared);
     input.set(
         "label",
-        lua.create_function(move |lua, value: Value| {
+        lua.create_function(move |lua, (value, device): (Value, Value)| {
             if !rules.clock.is_drawing() {
                 return Err(fail(
                     lua,
@@ -1717,7 +1717,35 @@ pub(crate) fn install_input(lua: &Lua, shared: &Rc<Shared>, input: &Table) -> ml
                 }
             };
             let (id, _) = find(lua, map, "label", &value)?;
-            Ok(map.label(id, tools.device.get(), tools.style.get()))
+            let gamepad = match &device {
+                Value::Nil => return Ok(map.label(id, tools.device.get(), tools.style.get())),
+                Value::String(text) => match &*text.to_str()? {
+                    "keyboard" => false,
+                    "gamepad" => true,
+                    other => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "game.input.label's device is \"keyboard\" or \"gamepad\", but it \
+                                 was given \"{other}\". Write it like this: \
+                                 game.input.label(\"jump\", \"gamepad\")"
+                            ),
+                        ));
+                    }
+                },
+                other => {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "game.input.label's device is \"keyboard\" or \"gamepad\" in quotes, \
+                             but it was given {}. Write it like this: \
+                             game.input.label(\"jump\", \"gamepad\")",
+                            describe(other)
+                        ),
+                    ));
+                }
+            };
+            Ok(map.label_on(id, gamepad, tools.style.get()))
         })?,
     )?;
     Ok(())

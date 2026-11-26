@@ -94,8 +94,16 @@ pub(crate) const MENU_STYLE_FIELDS: &[&str] = &[
     "layer",
 ];
 #[cfg(test)]
-pub(crate) const PAUSE_MENU_FIELDS: &[&str] =
-    &["enabled", "title", "open", "close", "isOpen", "addRow"];
+pub(crate) const PAUSE_MENU_FIELDS: &[&str] = &[
+    "enabled",
+    "title",
+    "open",
+    "close",
+    "isOpen",
+    "addRow",
+    "controls",
+    "hideControl",
+];
 
 /// Makes the tables the built-ins fill in and puts them on `game`.
 pub(crate) fn make_tables(lua: &Lua, game: &Table) -> mlua::Result<()> {

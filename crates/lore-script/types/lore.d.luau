@@ -3733,8 +3733,13 @@ declare game: {
         --- other device's if that has none, or "" if nothing is bound.
         --- The player can change it while the game runs, so it can only be
         --- read while drawing, in `game.onDraw`.
+        --- Give a second word, "keyboard" or "gamepad", to get what is bound
+        --- on that device only (every binding, joined with ", "; "" if it has
+        --- none there), whichever device the player is using. A direction
+        --- reads "W A S D", "Left stick", "D-pad" or "Mouse".
         --- Example: game.onDraw(function() hint.text = "Press " .. game.input.label("interact") end)
-        label: (action: string) -> string,
+        --- Example: game.onDraw(function() pad.text = game.input.label("jump", "gamepad") end)
+        label: (action: string, device: ("keyboard" | "gamepad")?) -> string,
 
         --- The characters the player typed since the last tick, as they are
         --- (no Backspace, Enter or Escape: `typedKeys` has those). It is
@@ -3983,6 +3988,21 @@ declare game: {
         --- rows at the top of the script, before it first opens.
         --- Example: game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = photo }))
         addRow: (row: MenuRow) -> (),
+
+        --- Whether the settings have a Controls page (true): a row for
+        --- every action the player can rebind, the engine's and the game's
+        --- own, where pressing a row and then a key or button gives it a new
+        --- one, and a row that puts the defaults back. False takes the page
+        --- away. Say it at the top of the script, before the menu opens.
+        --- Example: game.pauseMenu.controls = false
+        controls: boolean,
+
+        --- Leaves one action out of the Controls page, such as one the
+        --- player should not move. The name is checked when the page is
+        --- built, so it can be said before the game's own actions are made.
+        --- A name that is no action is told in the log, with the line.
+        --- Example: game.pauseMenu.hideControl("melee")
+        hideControl: (action: string) -> (),
     },
 
     --- How fast this computer is drawing pictures. It is different on every
