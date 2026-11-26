@@ -540,8 +540,8 @@ fn the_menu_goes_back_to_the_action_set_and_the_pause_the_game_had() {
     // A game with a shop of its own, in the "menu" set, that pauses the
     // game itself and opens the pause menu from in there.
     let main = r#"
-        game.input.bind("shop", { "F3" })
-        game.input.bind("help", { "F4" })
+        game.input.bind("shop", { "F3", "LeftBumper" })
+        game.input.bind("help", { "F4", "GamepadSelect" })
         local pauseMenu = require("./pause_menu")
         game.onTick(function()
             if game.input.justPressed("shop") then

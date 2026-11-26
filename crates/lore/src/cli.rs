@@ -575,11 +575,12 @@ fn no_game_in(folder: &Path, command: &str) -> String {
 /// there is something to open and edit.
 ///
 /// With `game`, the folder of a game, the controls are the game's own: the
-/// engine's actions, then the ones the game's script made for itself, which
-/// the file keeps in its `[game_bindings]` table. The file written then has
-/// them in it too.
+/// engine's actions, then the ones the game's script made for itself. A
+/// game with actions of its own has a bindings file of its own, which wins
+/// over the player-wide one for that game: it is written too if there is
+/// none, and each change says which file it came from.
 ///
-/// The second text is what is wrong with the file, to print as a warning.
+/// The second text is what is wrong with the files, to print as a warning.
 pub fn controls(game: Option<&Path>) -> Result<(String, Vec<String>), String> {
     let path = crate::controls::file().ok_or_else(|| {
         format!(
@@ -589,6 +590,7 @@ pub fn controls(game: Option<&Path>) -> Result<(String, Vec<String>), String> {
             crate::controls::FILE_VARIABLE
         )
     })?;
+    let game_path = game.and_then(|folder| crate::controls::game_file(&game_name(folder)));
     // The game's map is the standard one with what its script added.
     let defaults = match game {
         Some(folder) => open_game(folder, &ActionMap::standard(), "lore controls")?
@@ -596,8 +598,11 @@ pub fn controls(game: Option<&Path>) -> Result<(String, Vec<String>), String> {
             .actions(),
         None => ActionMap::standard(),
     };
+    // What the player-wide file alone makes of it, to tell where a change came from.
+    let mut player_only = defaults.clone();
+    let _ = crate::controls::load(&path, &mut player_only);
     let mut actions = defaults.clone();
-    let mut problems = crate::controls::load(&path, &mut actions);
+    let mut problems = crate::controls::load_both(&path, game_path.as_deref(), &mut actions);
     // A game says this itself when it starts; here nothing else would. An
     // action with nothing bound at all was turned off on purpose.
     for gap in actions.parity_gaps() {
@@ -607,16 +612,28 @@ pub fn controls(game: Option<&Path>) -> Result<(String, Vec<String>), String> {
         }
     }
 
+    let write_error = |file: &Path, error: std::io::Error| {
+        format!(
+            "Could not write your controls to {}: {error}. Check that you may write \
+             there, or set {} to the path of another file.",
+            file.display(),
+            crate::controls::FILE_VARIABLE
+        )
+    };
     let created = !path.exists();
     if created {
-        crate::controls::save(&path, &actions, &defaults).map_err(|error| {
-            format!(
-                "Could not write your controls to {}: {error}. Check that you may write \
-                 there, or set {} to the path of another file.",
-                path.display(),
-                crate::controls::FILE_VARIABLE
-            )
-        })?;
+        let standard = ActionMap::standard();
+        crate::controls::save(&path, &standard, &standard)
+            .map_err(|error| write_error(&path, error))?;
+    }
+    // Only a game with actions of its own has anything to keep in a file.
+    let game_text = defaults.write_game_bindings(&defaults);
+    let mut game_created = false;
+    if let (Some(file), Some(text)) = (&game_path, &game_text)
+        && !file.exists()
+    {
+        crate::controls::write_whole(file, text).map_err(|error| write_error(file, error))?;
+        game_created = true;
     }
 
     let width = (actions.actions())
@@ -635,10 +652,21 @@ pub fn controls(game: Option<&Path>) -> Result<(String, Vec<String>), String> {
             } else {
                 bindings.join(", ")
             };
-            let changed = defaults
-                .action(name)
-                .is_ok_and(|default| defaults.bindings(default) != actions.bindings(action));
-            let note = if changed { "  (changed by you)" } else { "" };
+            let differs = |than: &ActionMap| {
+                than.action(name)
+                    .is_ok_and(|other| than.bindings(other) != actions.bindings(action))
+            };
+            let note = if differs(&player_only) {
+                "  (changed in this game's file)"
+            } else if differs(&defaults) {
+                if game_path.is_some() {
+                    "  (changed in your file)"
+                } else {
+                    "  (changed by you)"
+                }
+            } else {
+                ""
+            };
             lines.push_str(&format!("  {name:<width$}  {bound}{note}\n"));
         }
         lines
@@ -647,17 +675,32 @@ pub fn controls(game: Option<&Path>) -> Result<(String, Vec<String>), String> {
     let own = list(true);
     if !own.is_empty() {
         said.push_str(&format!(
-            "\nThe game's own actions, which its script made. They are kept in the file's \
-             [game_bindings] table, so they stay with this game:\n{own}"
+            "\nThe game's own actions, which its script made:\n{own}"
         ));
     }
     said.push_str(&format!(
-        "\nThey are kept in {}{}.\nOpen that file in a text editor, change a line and save. \
-         Games read it when they start, and a game that is running \
-         reads it again when you save.\n",
+        "\nThey are kept in {}{}.",
         path.display(),
         if created { ", made just now" } else { "" }
     ));
+    if let Some(file) = &game_path {
+        let note = if game_created {
+            ", made just now"
+        } else if !file.exists() {
+            ", which is not made because the game has no actions of its own: make it to \
+             change controls for this game alone"
+        } else {
+            ""
+        };
+        said.push_str(&format!(
+            "\nThis game's own file, which wins over that one for this game, is {}{note}.",
+            file.display()
+        ));
+    }
+    said.push_str(
+        "\nOpen a file in a text editor, change a line and save. Games read them when they \
+         start, and a game that is running reads them again when you save.\n",
+    );
     let (rumble, unread) = rumble_setting();
     said.push_str(&rumble);
     problems.extend(unread);

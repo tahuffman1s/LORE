@@ -335,6 +335,13 @@ end)
 -- A button of the game's own, the pointer and the wheel, and stepping
 -- through a menu.
 game.input.bind("open_map", { "F1", "GamepadSelect" })
+game.input.addSet("riding", { mouse = "look" })
+game.input.addSet("shop", { mouse = "pointer" })
+game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })
+for _, setName in game.input.sets() do
+    print(setName, #game.input.actions(setName), #game.input.actions())
+end
+print(table.concat(game.input.bindings("gallop"), ", "))
 local mapShown = false
 local selected = 1
 local scroll = 0
@@ -770,3 +777,14 @@ game.onTick(function()
     print(held)
 end)
 game.weapon("carbine", { from = "rifle", hands = "two", support = vector.create(0, -0.03, -0.2), action = "bolt", ejects = true, ejectAt = vector.create(0.02, 0.05, -0.1) })
+
+game.input.showControlsNotice(false)
+game.input.onControlsChanged(function(change)
+    hint.text = change.message
+    for _, one in change.changes do
+        print(one.action, one.before, one.after)
+    end
+    if change.problem then
+        print(change.file, change.line or 0, change.problem)
+    end
+end)

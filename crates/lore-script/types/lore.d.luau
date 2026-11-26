@@ -1682,6 +1682,35 @@ declare extern type Shader with
     function remove(self): ()
 end
 
+--- What `game.input.onControlsChanged` is handed when the player's controls
+--- file was read again, or could not be.
+--- Example: game.input.onControlsChanged(function(change) toast.text = change.message end)
+export type ControlsChange = {
+    --- The same sentence the engine's notice shows, e.g. "Controls updated: jump Space to F".
+    message: string,
+    --- Each action whose buttons changed; empty when none did.
+    changes: { BindingChange },
+    --- What is wrong with the file, or nil when it was good.
+    problem: string?,
+    --- The file the problem is in, or, when the file was fine, the player's own
+    --- controls file ("bindings.toml"), with enough of its path to tell the player's from the game's.
+    file: string,
+    --- The line of the problem, or nil when there is none to point at.
+    line: number?,
+}
+
+--- One action whose buttons the player changed, named as `game.input.label`
+--- names them.
+--- Example: for _, one in change.changes do print(one.action, one.before, one.after) end
+export type BindingChange = {
+    --- The action's name: "jump".
+    action: string,
+    --- What it was bound to: "Space".
+    before: string,
+    --- What it is bound to now: "F".
+    after: string,
+}
+
 --- One of the player's settings, as `game.settings.list()` describes it:
 --- enough for a menu to build a row for it without knowing its name.
 --- Example: for _, setting in game.settings.list() do print(setting.label, setting.value) end
@@ -3310,7 +3339,7 @@ declare game: {
         --- hear the player at a time: "gameplay" (moving, looking, "jump"
         --- and the rest) when a game starts, or "menu" (the "menu_..."
         --- actions), in which the mouse is a pointer and no longer turns
-        --- the view. Use "menu" while your own shop or inventory is open,
+        --- the view. A set made with `addSet` works the same way. Use "menu" while your own shop or inventory is open,
         --- and always give the player a way back: in "menu" the "pause"
         --- action is not heard, so go back to "gameplay" on "menu_back"
         --- (Escape, or B on a gamepad). The button that was down when the
@@ -3318,6 +3347,7 @@ declare game: {
         --- The window switches when it draws its next picture, so read the
         --- new set's actions in later ticks, not in the tick that calls
         --- useSet. Saving the script puts the game back in "gameplay".
+        --- Example: game.input.useSet("riding")
         --- Example: if game.input.justPressed("interact") then game.input.useSet("menu") end
         --- Example: if game.input.justPressed("menu_back") then game.input.useSet("gameplay") end
         useSet: (set: string) -> (),
@@ -3333,16 +3363,51 @@ declare game: {
         --- engine's own "menu_click" or "use_item", and not the name of one
         --- of the engine's actions (read those with `pressed`). `bindings`
         --- are button names: "F1", "MouseLeft", "GamepadSelect",
-        --- "LeftBumper"... Give a gamepad button too, so nobody is left
-        --- out. A gamepad has two buttons LORE leaves free for a game:
+        --- "LeftBumper"... Give at least one keyboard or mouse button and one
+        --- gamepad button; without both, bind stops with an error. A
+        --- gamepad has two buttons LORE leaves free for a game:
         --- GamepadSelect and LeftBumper. Sharing any other button with an
         --- engine action works, but the player is told of the clash. Write
         --- it at the top of the file, outside any function; once made, read
-        --- it like any action. The action works whichever set of actions is
-        --- live.
+        --- it like any action. Bind each action once: a name written twice is
+        --- an error. A saved script's actions are in use at once: no need to
+        --- start the game again.
         --- Example: game.input.bind("open_map", { "F1", "GamepadSelect" })
+        --- Example: game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })
+        --- Without `set` the action works whichever set of actions is live;
+        --- with `{ set = "riding" }` it is heard only while that set is live
+        --- (one of the engine's, or one made above it with `addSet`).
         --- Example: if game.input.justPressed("open_map") then mapShown = not mapShown end
-        bind: (name: string, bindings: { string }) -> (),
+        bind: (name: string, bindings: { string }, options: { set: string? }?) -> (),
+
+        --- Makes a set of actions of the game's own, such as "riding" for
+        --- the actions that only work on a horse. `name` is 1 to 40 lower
+        --- case letters, digits and underscores, and not "gameplay", "menu",
+        --- "editor" (the level editor's) or a set you already made. `mouse` says what the mouse
+        --- is for while the set is live: "look" (the default) turns the
+        --- view, "pointer" shows a cursor for a menu. Write it at the top of
+        --- the file, outside any function, above the `bind` calls that name
+        --- it. Switch to it with `useSet`.
+        --- Example: game.input.addSet("riding")
+        --- Example: game.input.addSet("shop", { mouse = "pointer" })
+        addSet: (name: string, options: { mouse: ("look" | "pointer")? }?) -> (),
+
+        --- Every set of actions the game has: "gameplay", "menu" and the
+        --- ones made with `addSet` (not the level editor's own).
+        --- Example: for _, name in game.input.sets() do print(name) end
+        sets: () -> { string },
+
+        --- The names of the actions: all of them, or only those heard while
+        --- one set is live (the game's own actions with no set are heard in
+        --- every set).
+        --- Example: for _, name in game.input.actions("riding") do print(name) end
+        actions: (set: string?) -> { string },
+
+        --- The buttons an action is bound to right now, with the player's
+        --- own bindings file taken into account, written as `bind` takes
+        --- them: { "F1", "GamepadSelect" }.
+        --- Example: print(table.concat(game.input.bindings("open_map"), ", "))
+        bindings: (action: string) -> { string },
 
         --- Where the pointer is, in pixels on a screen 1080 high, from the
         --- top left corner: x right and y down. nil when there is no free
@@ -3375,6 +3440,21 @@ declare game: {
         --- read while drawing, in `game.onDraw`.
         --- Example: game.onDraw(function() hint.text = "Press " .. game.input.label("interact") end)
         label: (action: string) -> string,
+
+        --- Calls `handler` when the player's controls file is saved and read again, and once at start if it is wrong.
+        --- `change.message` is the sentence the engine's notice shows, `change.changes` lists
+        --- each action that changed (`action`, `before`, `after`; empty when none did),
+        --- `change.problem` says what is wrong (nil when the file was good), and `change.file`
+        --- and `change.line` say where (`line` is nil when unknown). The last good controls stay in use.
+        --- Call it once, at the top of the file.
+        --- Example: game.input.onControlsChanged(function(change) toast.text = change.message end)
+        onControlsChanged: (handler: (change: ControlsChange) -> ()) -> (),
+
+        --- `false` hides the engine's own controls notice, both the short notice and the
+        --- error bar, so a game can show `change.message` its own way; `true` brings it back.
+        --- It lasts until set back, including across a saved script.
+        --- Example: game.input.showControlsNotice(false)
+        showControlsNotice: (shown: boolean) -> (),
     },
 
     --- The player's settings: how loud the game is, how the view turns,

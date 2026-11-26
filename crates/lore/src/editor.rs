@@ -298,54 +298,61 @@ const PLAY_KEYS: [&str; 2] = ["F5", "GamepadSelect"];
 ///
 /// `None` if `game` already has a set or an action by one of these names.
 fn controls(mut map: ActionMap) -> Option<(ActionMap, Controls)> {
-    let back = map.button("editor_back", PLAY_KEYS).ok()?;
-    let set = map.add_set("editor", MouseMode::Pointer).ok()?;
-    let fly = map.axis2d("editor_fly", ["WASD", "LeftStick"]).ok()?;
+    map.button("editor_back", PLAY_KEYS).ok()?;
+    map.add_set("editor", MouseMode::Pointer).ok()?;
+    map.axis2d("editor_fly", ["WASD", "LeftStick"]).ok()?;
     let look = map
         .axis2d("editor_look", ["MouseMotion", "RightStick"])
         .ok()?;
     map.set_stick_curve(look, 2.0);
-    let rise = map
-        .axis1d("editor_rise", ["Q/E", "LeftTrigger/RightTrigger"])
+    map.axis1d("editor_rise", ["Q/E", "LeftTrigger/RightTrigger"])
         .ok()?;
-    let fast = map
-        .button("editor_fast", ["LeftShift", "LeftStickPress"])
+    map.button("editor_fast", ["LeftShift", "LeftStickPress"])
         .ok()?;
-    let faster = map
-        .button("editor_faster", ["MouseWheelUp", "DpadUp"])
+    map.button("editor_faster", ["MouseWheelUp", "DpadUp"])
         .ok()?;
-    let slower = map
-        .button("editor_slower", ["MouseWheelDown", "DpadDown"])
+    map.button("editor_slower", ["MouseWheelDown", "DpadDown"])
         .ok()?;
     // Not Space or Enter, which also press whichever button of the panels
     // was clicked last.
-    let place = map.button("editor_place", ["P", "GamepadSouth"]).ok()?;
-    let grab = map.button("editor_grab", ["F", "GamepadWest"]).ok()?;
-    let cancel = map
-        .button("editor_cancel", ["Escape", "GamepadEast"])
+    map.button("editor_place", ["P", "GamepadSouth"]).ok()?;
+    map.button("editor_grab", ["F", "GamepadWest"]).ok()?;
+    map.button("editor_cancel", ["Escape", "GamepadEast"])
         .ok()?;
-    let turn_left = map.button("editor_turn_left", ["Z", "LeftBumper"]).ok()?;
-    let turn_right = map.button("editor_turn_right", ["C", "RightBumper"]).ok()?;
-    let snap = map.button("editor_snap", ["G", "GamepadNorth"]).ok()?;
-    let play = map.button("editor_play", PLAY_KEYS).ok()?;
-    let controls = Controls {
-        play,
-        back,
-        set,
-        fly,
-        look,
-        rise,
-        fast,
-        faster,
-        slower,
-        place,
-        grab,
-        cancel,
-        turn_left,
-        turn_right,
-        snap,
-    };
+    map.button("editor_turn_left", ["Z", "LeftBumper"]).ok()?;
+    map.button("editor_turn_right", ["C", "RightBumper"]).ok()?;
+    map.button("editor_snap", ["G", "GamepadNorth"]).ok()?;
+    map.button("editor_play", PLAY_KEYS).ok()?;
+    let controls = Controls::find(&map)?;
     Some((map, controls))
+}
+
+impl Controls {
+    /// The editor's actions in `map`, found by name. `map` is the one made
+    /// by [`controls`], or what the window made of it since: the player's
+    /// bindings files read onto it, or a saved script's changes to the
+    /// game's actions, either of which can move an id. `None` if `map` has
+    /// lost one of them.
+    fn find(map: &ActionMap) -> Option<Self> {
+        let get = |name: &str| map.action(name).ok();
+        Some(Self {
+            set: map.set("editor").ok()?,
+            fly: get("editor_fly")?,
+            look: get("editor_look")?,
+            rise: get("editor_rise")?,
+            fast: get("editor_fast")?,
+            faster: get("editor_faster")?,
+            slower: get("editor_slower")?,
+            place: get("editor_place")?,
+            grab: get("editor_grab")?,
+            cancel: get("editor_cancel")?,
+            turn_left: get("editor_turn_left")?,
+            turn_right: get("editor_turn_right")?,
+            snap: get("editor_snap")?,
+            play: get("editor_play")?,
+            back: get("editor_back")?,
+        })
+    }
 }
 
 /// Writes `speed` as it is shown: whole metres a second from 10 up, and
@@ -389,8 +396,15 @@ struct Editor {
     /// Whether things were last placed or carried with keys or a gamepad:
     /// the spot the camera looks at is then ringed in the picture.
     aiming: bool,
-    /// Every action the window reads: the game's and the editor's.
+    /// The editor's base actions: the standard ones and the editor's own,
+    /// with the player's bindings. A game played from here adds its own on
+    /// top of this, so it never holds the game's.
     actions: ActionMap,
+    /// The actions the window reads now: `actions`, or with a game's own
+    /// while one is played from here.
+    live: ActionMap,
+    /// A map for the window to take into use in the next frame.
+    hand_over: Option<ActionMap>,
     /// The level's solid shapes, as a game played from here walks them.
     ground: Ground,
     /// The lamps the level places, by name, for a game played from here.
@@ -450,6 +464,8 @@ impl Editor {
             held: None,
             aiming: false,
             actions: actions.clone(),
+            live: actions.clone(),
+            hand_over: None,
             ground,
             level_lamps: if stand_in {
                 Vec::new()
@@ -463,6 +479,37 @@ impl Editor {
             settings: Settings::default(),
         };
         Some((editor, actions))
+    }
+
+    /// Takes in `map`, the actions as the window has them now: a bindings
+    /// file was saved, or a saved script changed the game's actions. The
+    /// window made it from the map this editor gave it, so the editor's
+    /// own actions are in it; they are looked up again, as an id can move,
+    /// and the level is played with this map from now on. A map without
+    /// them is not used.
+    fn follow_controls(&mut self, map: &ActionMap) {
+        match Controls::find(map) {
+            Some(controls) => {
+                self.controls = controls;
+                self.live = map.clone();
+                // The player's new bindings, by name, onto the base: the
+                // game's own actions are not in it.
+                for action in self.actions.actions().collect::<Vec<_>>() {
+                    let name = self.actions.name(action).to_owned();
+                    if let Ok(found) = map.action(&name)
+                        && let Err(error) = self
+                            .actions
+                            .set_bindings(action, map.bindings(found).iter().copied())
+                    {
+                        log::warn!("{error}");
+                    }
+                }
+            }
+            None => log::warn!(
+                "The editor's own controls are missing from the actions now in use, so it \
+                 keeps the ones it had. Remove any action called editor_* from the game."
+            ),
+        }
     }
 
     /// Plays the level from where the camera is. What was being carried or
@@ -488,6 +535,9 @@ impl Editor {
                 // The level's lamps are the script's to find by name and
                 // change.
                 play.set_level_lamps(&self.level_lamps);
+                // The window's input is the editor's: the game's own
+                // actions (game.input.bind) go into it now.
+                self.hand_over = Some(play.host().actions());
                 self.play = Some(play);
             }
             Err(problem) => {
@@ -501,6 +551,12 @@ impl Editor {
     /// as they were, since playing never touched them.
     fn stop_playing(&mut self) {
         self.play = None;
+        // The game's own actions leave the window's input.
+        if let Some(controls) = Controls::find(&self.actions) {
+            self.controls = controls;
+        }
+        self.live = self.actions.clone();
+        self.hand_over = Some(self.actions.clone());
         self.hush = true;
         // No frame is drawn part of the way from an older tick.
         self.before = self.camera;
@@ -704,6 +760,12 @@ impl Game for Editor {
     fn frame(&mut self, frame: &mut Frame) {
         if let Some(&settings) = frame.settings() {
             self.settings = settings;
+        }
+        if let Some(map) = frame.new_controls() {
+            self.follow_controls(map);
+        }
+        if let Some(map) = self.hand_over.take() {
+            frame.replace_actions(map);
         }
         if let Some(play) = &mut self.play {
             // The game's own actions are live, in the set its script chose.
@@ -984,11 +1046,11 @@ pub fn run(
     // Playing the level from here is done with the player's own controls
     // and settings, as `lore run` does it, and what its settings menu
     // changes is kept for the player as it is there.
-    if let Some(path) = crate::controls::file() {
-        for problem in crate::controls::load(&path, &mut config.actions) {
-            log::warn!("{problem}");
-        }
-    }
+    // The window reads the player's bindings file and the game's, and again
+    // when either is saved, onto the editor's actions as well as the
+    // game's: see [`Editor::follow_controls`].
+    config.controls_file = crate::controls::file();
+    config.game_controls_file = crate::controls::game_file(name);
     config.settings_file = crate::settings::file();
     if let Some(path) = &config.settings_file {
         let (settings, problems) = crate::settings::load(path);
@@ -2610,6 +2672,72 @@ mod tests {
             input.set_active_set(set);
         }
         frame
+    }
+
+    #[test]
+    fn a_map_read_again_gives_the_game_its_new_bindings_and_leaves_the_editors_actions() {
+        let (mut editor, _) = editor();
+        let mut map = editor.actions.clone();
+        let jump = map.action("jump").unwrap();
+        map.set_bindings(jump, ["J".parse().unwrap()]).unwrap();
+        editor.follow_controls(&map);
+        let kept = editor
+            .actions
+            .bindings(editor.actions.action("jump").unwrap());
+        assert_eq!(kept[0].to_string(), "J");
+        assert_eq!(editor.actions.layout(), map.layout());
+        // Still the editor's own: the set and the play key.
+        assert_eq!(editor.controls.set, map.set("editor").unwrap());
+        assert_eq!(editor.controls.play, map.action("editor_play").unwrap());
+        // A game that gains an action, as a saved script does, keeps them too.
+        let mut more = map.clone();
+        more.button("dash", ["V"]).unwrap();
+        editor.follow_controls(&more);
+        assert_eq!(editor.live.layout(), more.layout());
+        // The base stays the editor's: no game action in it.
+        assert!(editor.actions.action("dash").is_err());
+        assert_eq!(editor.controls.back, more.action("editor_back").unwrap());
+    }
+
+    #[test]
+    fn a_game_action_is_handed_to_the_window_on_play_and_the_base_comes_back_on_stop() {
+        let (folder, mut editor, mut input) = game_in("hand_over", ONE_SPAWN);
+        std::fs::write(
+            folder.join(lore_script::ENTRY_SCRIPT),
+            "game.input.bind(\"dash\", { \"V\", \"LeftBumper\" })\n",
+        )
+        .unwrap();
+        let base = editor.actions.layout();
+        editor.play_asked = true;
+        let mut frame = tick_and_frame(&mut editor, &mut input);
+        assert!(editor.play.is_some(), "{}", editor.play_problem);
+        let handed = frame
+            .take_new_actions()
+            .expect("the game's map is handed over");
+        assert!(handed.action("dash").is_ok());
+        assert!(handed.action("editor_back").is_ok());
+        input.set_map(handed.clone());
+        // Follow it as the window does, then play again after stopping.
+        editor.follow_controls(&handed);
+        assert!(editor.actions.action("dash").is_err());
+        assert_eq!(editor.actions.layout(), base);
+        editor.stop_playing();
+        let mut frame = Frame::new(1.0);
+        editor.frame(&mut frame);
+        let back = frame.take_new_actions().expect("the base map comes back");
+        assert_eq!(back.layout(), base);
+        // A second F5 starts cleanly: the base has no game action.
+        editor.play_asked = true;
+        editor.tick(input.tick(), STEP);
+        assert!(editor.play.is_some(), "{}", editor.play_problem);
+    }
+
+    #[test]
+    fn a_map_without_the_editors_actions_is_not_taken() {
+        let (mut editor, _) = editor();
+        let before = editor.actions.layout();
+        editor.follow_controls(&ActionMap::standard());
+        assert_eq!(editor.actions.layout(), before);
     }
 
     #[test]

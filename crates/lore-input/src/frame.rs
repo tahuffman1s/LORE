@@ -37,6 +37,10 @@ pub struct InputFrame {
     /// Notches the wheel rolled over the free pointer since the previous tick.
     /// Above zero is away from the player. A touchpad gives parts of a notch.
     pub wheel: f32,
+    /// The [`ActionMap::layout`](crate::ActionMap::layout) of the map the frame was made from, so that
+    /// a frame is never read with a map whose ids differ. 0 for a frame made
+    /// without one.
+    pub layout: u64,
     pub(crate) actions: Vec<ActionState>,
 }
 
@@ -56,6 +60,7 @@ impl Clone for InputFrame {
             pointer: self.pointer,
             screen: self.screen,
             wheel: self.wheel,
+            layout: self.layout,
             actions: self.actions.clone(),
         }
     }
@@ -67,6 +72,7 @@ impl Clone for InputFrame {
         self.pointer = source.pointer;
         self.screen = source.screen;
         self.wheel = source.wheel;
+        self.layout = source.layout;
         self.actions.clone_from(&source.actions);
     }
 }
@@ -79,6 +85,7 @@ impl InputFrame {
             pointer: None,
             screen: DEFAULT_SCREEN,
             wheel: 0.0,
+            layout: 0,
             actions: vec![ActionState::default(); actions],
         }
     }

@@ -29,12 +29,15 @@ use crate::modules::{Files, Modules, Touched, Watch, stamp};
 use crate::settings_api::{Setting, SettingValue, SettingsState};
 use crate::shader_api::{ShaderSaid, ShaderState};
 use crate::time_api::Clock;
-use crate::tools_api::{Motion, Movement, Teleport, Tools};
+use crate::tools_api::{ControlsChange, Motion, Movement, Teleport, Tools};
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
 use crate::weather_api::{TornadoAsk, WeatherHere, WeatherSaid};
 
 /// The file every game starts from, inside the game's folder.
 pub const ENTRY_SCRIPT: &str = "main.luau";
+
+/// How many rereads of the controls wait to be told to a script.
+const MOST_CONTROL_NEWS: usize = 8;
 
 /// How much memory one script may use.
 const MEMORY_LIMIT: usize = 256 * 1024 * 1024;
@@ -109,6 +112,15 @@ pub struct ScriptHost {
     /// The actions the script reads by name, and the ones it made with
     /// `game.input.bind`.
     actions: Rc<RefCell<ActionMap>>,
+    /// [`ActionMap::layout`] of `actions`, kept for the stale-frame check.
+    layout: u64,
+    /// The actions the host was opened with. Each version of the script
+    /// starts from these and adds its own, so an action it no longer binds
+    /// is gone.
+    base: ActionMap,
+    /// The actions a saved script changed, for the engine to put into its
+    /// input: see [`take_new_actions`](Self::take_new_actions).
+    new_actions: Option<ActionMap>,
     running: Option<Version>,
     /// Whether the `onStart` functions have been called.
     started: bool,
@@ -134,6 +146,11 @@ pub struct ScriptHost {
     spawn_due: bool,
     /// The game's time the last meteors were looked for at, in seconds.
     meteors_seen: Option<f64>,
+    /// Rereads of the player's controls the script has not been told of.
+    controls_told: Vec<ControlsChange>,
+    /// Whether the engine draws its own notice of those: it outlives this
+    /// version of the script.
+    controls_notice: Rc<Cell<bool>>,
     /// The sounds the game has, and the ones the script asked for that the
     /// engine has not yet taken. Kept here so a save loses none of them.
     audio: Rc<AudioState>,
@@ -187,6 +204,52 @@ impl std::fmt::Debug for ScriptHost {
             .field("last_error", &self.last_error)
             .finish_non_exhaustive()
     }
+}
+
+/// What a new version of the script did to the game's actions and action
+/// sets, in a sentence, or `None` if it left them as they were.
+fn changes(before: &ActionMap, after: &ActionMap) -> Option<String> {
+    if before == after {
+        return None;
+    }
+    let names = |map: &ActionMap| -> Vec<String> {
+        map.actions().map(|id| map.name(id).to_owned()).collect()
+    };
+    let (old, new) = (names(before), names(after));
+    let mut parts = Vec::new();
+    let mut list = |what: &str, found: Vec<&String>| {
+        if !found.is_empty() {
+            let found: Vec<&str> = found.into_iter().map(String::as_str).collect();
+            parts.push(format!("{what} {}", found.join(", ")));
+        }
+    };
+    list(
+        "added",
+        new.iter().filter(|name| !old.contains(name)).collect(),
+    );
+    list(
+        "removed",
+        old.iter().filter(|name| !new.contains(name)).collect(),
+    );
+    let same = |name: &String| {
+        let (Ok(was), Ok(is)) = (before.action(name), after.action(name)) else {
+            return true;
+        };
+        before.bindings(was) == after.bindings(is)
+            && before.set_of(was).map(|set| before.set_name(set))
+                == after.set_of(is).map(|set| after.set_name(set))
+    };
+    list("changed", new.iter().filter(|name| !same(name)).collect());
+    let sets = |map: &ActionMap| -> Vec<String> {
+        map.sets().map(|set| map.set_name(set).to_owned()).collect()
+    };
+    if parts.is_empty() || sets(before) != sets(after) {
+        parts.push("changed the action sets".to_owned());
+    }
+    Some(format!(
+        "The game's controls changed ({}): they are in use now.",
+        parts.join("; ")
+    ))
 }
 
 impl ScriptHost {
@@ -376,7 +439,10 @@ impl ScriptHost {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
             files,
             file: ENTRY_SCRIPT.to_owned(),
+            base: actions.clone(),
+            layout: actions.layout(),
             actions: Rc::new(RefCell::new(actions)),
+            new_actions: None,
             running: None,
             started: false,
             paused: false,
@@ -389,6 +455,8 @@ impl ScriptHost {
             respawn: false,
             spawn_due: false,
             meteors_seen: None,
+            controls_told: Vec::new(),
+            controls_notice: Rc::new(Cell::new(true)),
             audio: Rc::default(),
             given_images: Rc::new(images),
             images: Rc::default(),
@@ -450,6 +518,15 @@ impl ScriptHost {
     /// `step` must be the same on every tick: it is what the script's
     /// seconds are counted in.
     pub fn tick(&mut self, input: &InputFrame, step: f32) {
+        // A frame made for the actions before a save is for other ids than
+        // the script's now: until the engine has the new ones, nothing is
+        // pressed, rather than the wrong thing.
+        let blank = InputFrame::default();
+        let input = if input.layout == self.layout {
+            input
+        } else {
+            &blank
+        };
         if let Some(version) = &self.running {
             version.shared.input.borrow_mut().clone_from(input);
             // Which piece is held down, from this tick's pointer and click.
@@ -478,6 +555,7 @@ impl ScriptHost {
             self.weather.step(step);
         }
         self.meteors_due();
+        self.controls_due();
         self.moments_due();
         self.start();
         if std::mem::take(&mut self.spawn_due) {
@@ -783,6 +861,40 @@ impl ScriptHost {
                 ),
             );
         });
+    }
+
+    /// Tells the script that the player's bindings file was read again, or
+    /// could not be: its `game.input.onControlsChanged` functions hear of it
+    /// on the next tick. Call it once for each reading. At most
+    /// [`MOST_CONTROL_NEWS`] wait at once; a script that never ticks hears
+    /// only the newest.
+    pub fn controls_changed(&mut self, change: ControlsChange) {
+        if self.controls_told.len() >= MOST_CONTROL_NEWS {
+            self.controls_told.remove(0);
+        }
+        self.controls_told.push(change);
+    }
+
+    /// Whether the engine should draw its own notice of a reread of the
+    /// controls: true until the script calls `game.input.showControlsNotice(false)`.
+    #[must_use]
+    pub fn controls_notice_shown(&self) -> bool {
+        self.controls_notice.get()
+    }
+
+    /// Hands the script the rereads of the controls it has not heard of.
+    fn controls_due(&mut self) {
+        if self.controls_told.is_empty() {
+            return;
+        }
+        let told = std::mem::take(&mut self.controls_told);
+        let Some(version) = &self.running else { return };
+        let vm = version.vm.clone();
+        for change in &told {
+            if let Ok(table) = crate::tools_api::controls_table(&vm, change) {
+                self.call_all(|handlers| &handlers.controls_changed, table);
+            }
+        }
     }
 
     /// Tells the script of the moments the body's clips passed since the
@@ -1644,13 +1756,39 @@ impl ScriptHost {
     ///
     /// The engine must start its input from this map, after opening the
     /// host and before the first tick, so that every action has the same
-    /// id for the engine as for the script. An action a later version of
-    /// the script adds is not in the engine's copy: it is heard again once
-    /// the game is started again.
+    /// id for the engine as for the script. When a saved script changes
+    /// the actions or the sets, [`take_new_actions`](Self::take_new_actions)
+    /// hands over the new map.
     #[must_use]
     pub fn actions(&self) -> ActionMap {
         self.tools.hand_out();
         self.actions.borrow().clone()
+    }
+
+    /// The game's actions after a saved script added, changed or removed
+    /// some (or an action set), since this was last called. The engine puts
+    /// them into its input (after reading the player's bindings file onto
+    /// them) with [`Input::set_map`](lore_input::Input::set_map). `None`
+    /// when nothing changed.
+    ///
+    /// Until it does, a tick's frame made for the old map reads as nothing
+    /// pressed.
+    pub fn take_new_actions(&mut self) -> Option<ActionMap> {
+        self.new_actions.take()
+    }
+
+    /// Makes `fresh`, the actions the new version made, the ones the host
+    /// reads, and keeps them for the engine if they differ from the last.
+    fn follow_actions(&mut self, fresh: &Rc<RefCell<ActionMap>>) {
+        let said = changes(&self.actions.borrow(), &fresh.borrow());
+        self.actions = Rc::clone(fresh);
+        self.layout = fresh.borrow().layout();
+        let Some(said) = said else { return };
+        // Before the engine has its copy, the first one it takes is this.
+        if self.tools.was_handed_out() {
+            log::info!("{said}");
+            self.new_actions = Some(fresh.borrow().clone());
+        }
     }
 
     /// Gives the script the player's own bindings as they now are, so that
@@ -2020,6 +2158,7 @@ impl ScriptHost {
                         );
                     }
                 }
+                self.follow_actions(&version.shared.actions);
                 self.running = Some(version);
                 self.shaders.end_load();
                 // The new version has its own HUD, made as its file ran.
@@ -2071,9 +2210,10 @@ impl ScriptHost {
             Files::Memory(_) => Rc::clone(&self.given_images),
         };
         let shared = Rc::new(Shared {
-            actions: Rc::clone(&self.actions),
+            // Each version makes its own map from the opening one, so a
+            // version that fails to load leaves the running one's alone.
+            actions: Rc::new(RefCell::new(self.base.clone())),
             bound: RefCell::new(Vec::new()),
-            reloading: self.running.is_some(),
             tools: Rc::clone(&self.tools),
             handlers: RefCell::new(Handlers::default()),
             input: RefCell::new(InputFrame::default()),
@@ -2106,6 +2246,7 @@ impl ScriptHost {
             store: Rc::clone(&self.kept),
             weapons: Rc::clone(&self.weapons),
             settings: Rc::clone(&self.settings),
+            controls_notice: Rc::clone(&self.controls_notice),
             kinds: RefCell::new(Vec::new()),
             clock: Rc::clone(&self.clock),
             dice: Rc::clone(&self.dice),

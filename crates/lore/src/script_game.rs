@@ -599,6 +599,10 @@ impl Game for ScriptGame {
         if let Some(controls) = frame.new_controls() {
             self.host.set_controls(controls);
         }
+        if let Some(change) = frame.controls_change() {
+            self.host.controls_changed(change.clone());
+        }
+        frame.hide_controls_notice(!self.host.controls_notice_shown());
         frame.set_time_speed(self.host.time_speed());
         self.follow_settings(frame);
         // After those, so what the script asks for while drawing is in this frame.
@@ -665,6 +669,10 @@ impl Game for ScriptGame {
                 at,
                 number.wrapping_mul(0x9E37_79B1),
             ));
+        }
+        // Before the set: a saved script's new sets are in the input first.
+        if let Some(actions) = self.host.take_new_actions() {
+            frame.replace_actions(actions);
         }
         if let Some(set) = self.host.take_action_set() {
             frame.use_action_set(set);

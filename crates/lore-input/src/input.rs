@@ -46,6 +46,8 @@ pub struct Input {
     /// Wheel notches rolled over the pointer since the last tick.
     wheel: f32,
     frame: InputFrame,
+    /// [`ActionMap::layout`] of `map`, kept so a tick does not compute it.
+    layout: u64,
     /// The action waiting for a new key or button, and the one it replaces.
     listening: Option<(ActionId, Button)>,
     /// The last finished rebind, until it is taken.
@@ -116,8 +118,11 @@ impl Input {
     /// Starts with every device at rest.
     #[must_use]
     pub fn new(map: ActionMap) -> Self {
-        let frame = InputFrame::idle(map.len());
+        let mut frame = InputFrame::idle(map.len());
+        let layout = map.layout();
+        frame.layout = layout;
         Self {
+            layout,
             map,
             held: [false; Button::COUNT],
             latched: [false; Button::COUNT],
@@ -264,15 +269,28 @@ impl Input {
 
     /// Replaces the action map. Ids from the old map must be looked up again.
     ///
-    /// The live action set stays the one in the same position, or becomes
-    /// [`ActionMap::GAMEPLAY`] if the new map has fewer sets.
+    /// What is held stays held: an action the new map has under the same name
+    /// as the old one keeps its state, so a key that is still down does not
+    /// report `just_pressed` again. An action with a new name starts idle.
+    ///
+    /// The live action set stays the one with the same name, or becomes
+    /// [`ActionMap::GAMEPLAY`] if the new map has none by that name.
     pub fn set_map(&mut self, map: ActionMap) {
-        if map.mouse_mode(self.active).is_none() {
-            self.switch_to(ActionMap::GAMEPLAY);
+        let live = self.map.set_name(self.active);
+        match map.set(live) {
+            Ok(same) => self.active = same,
+            Err(_) => self.switch_to(ActionMap::GAMEPLAY),
         }
-        let tick = self.frame.tick;
-        self.frame = InputFrame::idle(map.len());
-        self.frame.tick = tick;
+        let mut frame = InputFrame::idle(map.len());
+        for (state, id) in frame.actions.iter_mut().zip(map.actions()) {
+            if let Ok(old) = self.map.action(map.name(id)) {
+                *state = self.frame.get(old);
+            }
+        }
+        frame.tick = self.frame.tick;
+        self.layout = map.layout();
+        frame.layout = self.layout;
+        self.frame = frame;
         self.map = map;
         self.listening = None;
         self.rebound = None;
@@ -296,6 +314,8 @@ impl Input {
         if map.mouse_mode(self.active).is_none() {
             self.switch_to(ActionMap::GAMEPLAY);
         }
+        self.layout = map.layout();
+        self.frame.layout = self.layout;
         self.map = map;
         self.listening = None;
         self.rebound = None;
@@ -596,6 +616,7 @@ impl Input {
         self.frame.pointer = self.pointer;
         self.frame.screen = self.screen;
         self.frame.wheel = std::mem::take(&mut self.wheel);
+        self.frame.layout = self.layout;
 
         // Taken out while it is filled, so the rest of `self` can be read.
         let mut states = std::mem::take(&mut self.frame.actions);
@@ -631,6 +652,7 @@ impl Input {
         frame.pointer = self.pointer;
         frame.screen = self.screen;
         frame.wheel = self.wheel;
+        frame.layout = self.layout;
         frame.actions.clear();
         frame.actions.extend(
             actions
@@ -653,7 +675,7 @@ impl Input {
         repressed: &[bool; Button::COUNT],
         mouse: [f32; 2],
     ) -> ActionState {
-        if action.set != self.active && !action.own {
+        if action.set != self.active && !action.everywhere {
             return ActionState {
                 just_released: last.pressed,
                 ..ActionState::default()
@@ -1618,6 +1640,84 @@ mod tests {
         input.press(Key::F1);
         let frame = input.tick();
         assert!(frame.just_pressed(toggle));
+    }
+
+    #[test]
+    fn a_set_scoped_own_action_is_heard_only_in_its_set() {
+        let mut map = ActionMap::new();
+        let riding = map.add_set("riding", MouseMode::Look).unwrap();
+        let gallop = map.own_button_in("gallop", ["H"], riding).unwrap();
+        let mut input = Input::new(map);
+
+        input.press(Key::H);
+        assert!(!input.tick().pressed(gallop));
+        input.release(Key::H);
+        input.tick();
+        input.set_active_set(riding);
+        input.press(Key::H);
+        assert!(input.tick().just_pressed(gallop));
+    }
+
+    #[test]
+    fn a_new_map_keeps_what_is_held_and_the_set_that_is_live() {
+        let mut map = ActionMap::new();
+        let jump = map.button("jump", ["Space"]).unwrap();
+        let shop = map.add_set("shop", MouseMode::Pointer).unwrap();
+        let mut input = Input::new(map);
+        input.set_active_set(shop);
+        input.press(Key::Space);
+        input.tick();
+
+        // A new map with another action first, and the same sets reordered.
+        let mut next = ActionMap::new();
+        let extra = next.button("extra", ["X"]).unwrap();
+        let jump2 = next.button("jump", ["Space"]).unwrap();
+        let other = next.add_set("other", MouseMode::Look).unwrap();
+        let shop2 = next.add_set("shop", MouseMode::Pointer).unwrap();
+        assert_ne!(next.layout(), input.map().layout());
+        input.set_map(next);
+        assert_eq!(input.map().set_name(shop2), "shop");
+        assert_ne!(shop2, shop);
+        assert_ne!(other, shop2);
+        let layout = input.map().layout();
+        let frame = input.tick();
+        assert_eq!(frame.layout, layout);
+        assert!(!frame.just_pressed(extra));
+        let _ = (jump, jump2);
+
+        // Held across the swap: not pressed anew. (jump is in gameplay, which
+        // is not live in "shop", so use the live set's reading: gameplay.)
+        let mut map = ActionMap::new();
+        let run = map.button("run", ["Space"]).unwrap();
+        let mut input = Input::new(map);
+        input.press(Key::Space);
+        assert!(input.tick().just_pressed(run));
+        let mut next = ActionMap::new();
+        next.button("new", ["Q"]).unwrap();
+        let run2 = next.button("run", ["Space"]).unwrap();
+        input.set_map(next);
+        let frame = input.tick();
+        assert!(frame.pressed(run2) && !frame.just_pressed(run2));
+
+        // A set that is gone falls back to gameplay.
+        let mut map = ActionMap::new();
+        let gone = map.add_set("gone", MouseMode::Pointer).unwrap();
+        let mut input = Input::new(map);
+        input.set_active_set(gone);
+        input.set_map(ActionMap::new());
+        assert_eq!(input.active_set(), ActionMap::GAMEPLAY);
+    }
+
+    #[test]
+    fn bindings_alone_do_not_change_the_layout() {
+        let mut map = ActionMap::new();
+        let jump = map.button("jump", ["Space"]).unwrap();
+        let before = map.layout();
+        map.set_bindings(jump, ["J".parse::<Binding>().unwrap()])
+            .unwrap();
+        assert_eq!(map.layout(), before);
+        map.button("fire", ["F"]).unwrap();
+        assert_ne!(map.layout(), before);
     }
 
     #[test]
