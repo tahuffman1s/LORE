@@ -112,15 +112,13 @@ fn the_date_moves_on_at_midnight_and_a_new_date_is_today() {
         print(game.sky.date())
         game.sky.setDate(2000, 2, 28)
         print(game.sky.hour(), game.sky.date())
-        game.sky.setHour(48 + 12)
-        print(game.clock.day, game.sky.date())
+        game.sky.setHour(24 + 12)
+        print(game.sky.date())
         "#,
     );
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
-    // The clock keeps counting its days through a new date: day 2 is the
-    // date said, and day 3 the day after.
-    assert_eq!(printed(), ["2027 1 1", "25 2000 2 28", "3 2000 2 29"]);
-    assert_eq!(host.take_hour(), Some(60.0));
+    assert_eq!(printed(), ["2027 1 1", "1 2000 2 28", "2000 2 29"]);
+    assert_eq!(host.take_hour(), Some(36.0));
 }
 
 #[test]

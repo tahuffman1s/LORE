@@ -259,6 +259,7 @@ fn a_save_of_the_script_starts_today_again_at_the_time_its_top_says() {
     run(&mut host, 1);
     host.restore_world_clock(WorldClock {
         hours: Some(24.0 * 4.0 + 17.0),
+        days_before: 0,
         day_minutes: 0.0,
         told: Some(24 * 4 + 17),
     });
@@ -304,4 +305,168 @@ fn hours_passed_while_paused_wait_to_be_told() {
         run(&mut host, 8),
         [(5, "hour 10".to_owned()), (5, "hour 11".to_owned())]
     );
+}
+
+/// Calls of `game.sky` in many orders, with hours passing between some:
+/// the planetarium's (a date, then an hour below 24), hours past 24, new
+/// dates over old ones, and an hour set back. Each call writes down what
+/// `game.sky.hour()` and `game.sky.date()` then give.
+const SKY_CALLS: &str = r#"
+local out = {}
+local function rec(label)
+    local y, m, d = game.sky.date()
+    local h = game.sky.hour()
+    table.insert(out, label .. "=" .. (h and string.format("%.17g", h) or "nil") .. " " .. tostring(y) .. "-" .. tostring(m) .. "-" .. tostring(d))
+end
+local s = game.sky
+-- 1: the planetarium's order
+s.setDate(2026, 1, 10) rec("1a") s.setHour(30) rec("1b") s.setDate(2026, 1, 11) rec("1c") s.setHour(7) rec("1d")
+-- 2
+s.setHour(30) rec("2a") s.setHour(7) rec("2b")
+-- 3
+s.setHour(5) rec("3a") s.setDate(2026, 3, 1) rec("3b") s.setHour(50) rec("3c") s.setHour(3) rec("3d")
+s.setDate(2026, 3, 5) rec("3e") s.setHour(26.5) rec("3f")
+-- 4
+s.setDate(2026, 12, 31) rec("4a") s.setHour(25) rec("4b") s.setDate(2000, 2, 28) rec("4c") s.setHour(36) rec("4d")
+-- 5
+s.setHour(-3) rec("5a") s.setHour(47.25) rec("5b") s.setDate(2024, 2, 28) rec("5c") s.setHour(0) rec("5d")
+-- 6: hours passing on ticks between calls
+s.setDayLength(1)
+s.setHour(22) rec("6a")
+local ticks = 0
+local function moment()
+    local y, m, d = s.date()
+    return (s.hour() or 12) % 24, y, m, d
+end
+game.onTick(function()
+    ticks += 1
+    if ticks % 50 == 0 then rec("t" .. ticks) end
+    if ticks == 200 then s.setDate(2026, 6, 1) rec("6b") end
+    if ticks == 300 then s.setHour(23.5) rec("6c") end
+    if ticks == 450 then
+        -- the planetarium's move: read the moment, set the date, then the hour
+        local h, y, m, d = moment()
+        s.setDate(y, m, d) rec("6d") s.setHour(h + 0.5) rec("6e")
+    end
+    if ticks == 600 then s.setHour(10) rec("6f") end
+    if ticks == 700 then s.setDate(2026, 6, 10) rec("6g") s.setHour(30) rec("6h") end
+    if ticks == 760 then error("OUT[" .. table.concat(out, "|") .. "]") end
+end)
+"#;
+
+/// What `SKY_CALLS` wrote down on the engine before the sky shared the
+/// world's clock, run there to the last bit.
+const SKY_BEFORE_THE_CLOCK: &[&str] = &[
+    "1a=nil 2026-1-10",
+    "1b=30 2026-1-11",
+    "1c=6 2026-1-11",
+    "1d=7 2026-1-11",
+    "2a=30 2026-1-12",
+    "2b=7 2026-1-11",
+    "3a=5 2026-1-11",
+    "3b=5 2026-3-1",
+    "3c=50 2026-3-3",
+    "3d=3 2026-3-1",
+    "3e=3 2026-3-5",
+    "3f=26.5 2026-3-6",
+    "4a=2.5 2026-12-31",
+    "4b=25 2027-1-1",
+    "4c=1 2000-2-28",
+    "4d=36 2000-2-29",
+    "5a=0 2000-2-28",
+    "5b=47.25 2000-2-29",
+    "5c=23.25 2024-2-28",
+    "5d=0 2024-2-28",
+    "6a=22 2024-2-28",
+    "t50=22.333333350718057 2024-2-28",
+    "t100=22.666666701436114 2024-2-28",
+    "t150=23.000000052154171 2024-2-28",
+    "t200=23.333333402872228 2024-2-28",
+    "6b=23.333333402872228 2026-6-1",
+    "t250=23.666666753590285 2026-6-1",
+    "t300=24.000000104308342 2026-6-2",
+    "6c=23.5 2026-6-1",
+    "t350=23.833333350718057 2026-6-1",
+    "t400=24.166666701436114 2026-6-2",
+    "t450=24.500000052154171 2026-6-2",
+    "6d=0.50000005215417076 2026-6-2",
+    "6e=1.0000000521541708 2026-6-2",
+    "t500=1.3333334028721944 2026-6-2",
+    "t550=1.666666753590218 2026-6-2",
+    "t600=2.0000001043082416 2026-6-2",
+    "6f=10 2026-6-2",
+    "t650=10.333333350718057 2026-6-2",
+    "t700=10.666666701436114 2026-6-2",
+    "6g=10.666666701436114 2026-6-10",
+    "6h=30 2026-6-11",
+    "t750=30.333333350718057 2026-6-11",
+];
+
+#[test]
+fn every_order_of_sky_calls_gives_the_date_and_hour_it_gave_before_the_clock() {
+    let mut host = game(SKY_CALLS);
+    for _ in 0..800 {
+        if host.last_error().is_some() {
+            break;
+        }
+        host.tick(&InputFrame::default(), STEP);
+    }
+    let message = mistake(&host);
+    let start = message.find("OUT[").expect("the script wrote what it saw") + 4;
+    let end = message[start..].find(']').expect("to its end") + start;
+    let found: Vec<&str> = message[start..end].split('|').collect();
+    assert_eq!(found, SKY_BEFORE_THE_CLOCK);
+}
+
+#[test]
+fn the_sky_s_calls_keep_the_clock_s_day_counting_on() {
+    let mut host = game(
+        r#"
+        game.sky.setDate(2026, 1, 10)
+        game.sky.setHour(30)
+        print(game.clock.day, game.clock.time)
+        game.sky.setDate(2026, 1, 11)
+        game.sky.setHour(7)
+        print(game.clock.day, game.clock.time, game.sky.date())
+        game.clock.skipTo("6:00")
+        print(game.clock.day, game.sky.date())
+        game.clock.time = "23:00"
+        print(game.clock.day, game.sky.date())
+        "#,
+    );
+    let lines: Vec<String> = run(&mut host, 1).into_iter().map(|(_, l)| l).collect();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        lines,
+        ["2 6:00", "2 7:00 2026 1 11", "3 2026 1 12", "3 2026 1 12"]
+    );
+}
+
+#[test]
+fn a_function_that_sets_the_time_back_stops_the_hours_after_it() {
+    let mut host = game(
+        r#"
+        game.clock.time = "8:00"
+        game.clock.onHour(function(hour) print("hour " .. hour, game.clock.time) end)
+        game.clock.onHour(10, function() game.clock.time = "9:00" end)
+        game.onStart(function() game.clock.skipTo("14:00") end)
+        "#,
+    );
+    let lines: Vec<String> = run(&mut host, 3).into_iter().map(|(_, l)| l).collect();
+    assert_eq!(lines, ["hour 9 14:00", "hour 10 14:00"]);
+    assert_eq!(host.time_of_day(), Some(9.0));
+}
+
+#[test]
+fn a_function_that_skips_on_tells_the_hours_it_passed_after_the_rest() {
+    let mut host = game(
+        r#"
+        game.clock.time = "8:00"
+        game.clock.onHour(function(hour) print("hour " .. hour) end)
+        game.clock.onHour(9, function() game.clock.skipTo("12:00") end)
+        game.onStart(function() game.clock.skipTo("10:00") end)
+        "#,
+    );
+    let lines: Vec<String> = run(&mut host, 3).into_iter().map(|(_, l)| l).collect();
+    assert_eq!(lines, ["hour 9", "hour 10", "hour 11", "hour 12"]);
 }

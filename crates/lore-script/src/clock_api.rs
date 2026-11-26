@@ -33,21 +33,36 @@ const MOST_HOUR_HANDLERS: usize = 1024;
 /// The world's clock as plain data: what a save keeps, and what
 /// [`ScriptHost::restore_world_clock`](crate::ScriptHost::restore_world_clock)
 /// puts back.
+///
+/// The clock counts in two parts so that `game.sky` reads exactly as it did
+/// before the clock was shared: `hours` is what `game.sky.hour()` gives,
+/// counted from midnight at the start of the date the sky's calendar was
+/// last given, and `days_before` the whole days the clock had counted
+/// before that date. The day of `game.clock.day` is made of both.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct WorldClock {
-    /// Hours since midnight at the start of day 1: 30.5 is half past six in
-    /// the morning of day 2. `None` until the game says a time or how long a
-    /// day lasts.
+    /// Hours since midnight at the start of the sky's date: 30.5 is half
+    /// past six in the morning of the day after. `None` until the game says
+    /// a time or how long a day lasts.
     pub hours: Option<f64>,
+    /// Whole days the clock counted before the sky's date: `game.sky.setDate`
+    /// moves the days `hours` held into here, so the date said is today and
+    /// the clock's day count goes on.
+    pub days_before: i64,
     /// How many minutes of play a whole day and night last, or 0 while the
     /// hours stand still.
     pub day_minutes: f64,
     /// The last whole hour `game.clock.onHour` functions were told of,
-    /// counted as `hours` is.
+    /// counted from midnight at the start of day 1.
     pub told: Option<i64>,
 }
 
 /// The world's clock, shared by `game.clock`, `game.sky` and the engine.
+///
+/// The rule for setting it: a time below 24 hours is a watch set within
+/// today, and never moves the clock's day; only hours passing (ticks,
+/// `skipTo`) and an hour of 24 or more said to `game.sky.setHour` move it
+/// on. Setting tells `onHour` nothing; passing time tells each hour once.
 #[derive(Debug, Default)]
 pub(crate) struct DayClock {
     now: Cell<WorldClock>,
@@ -69,26 +84,64 @@ impl DayClock {
         let mut now = self.now.get();
         change(&mut now);
         self.now.set(now);
+        self.changed.set(true);
     }
 
-    /// Hours since midnight at the start of day 1, if a time has been said.
+    /// Hours since midnight at the start of the sky's date, if a time has
+    /// been said: what `game.sky.hour()` gives and the sky is drawn at.
     pub(crate) fn hours(&self) -> Option<f64> {
         self.now.get().hours
     }
 
-    /// Sets the count of hours as it is, back or forward: what
-    /// `game.sky.setHour` does.
-    pub(crate) fn set_hours(&self, hours: f64) {
+    /// Hours since midnight at the start of day 1, if a time has been said.
+    fn clock_hours(&self) -> Option<f64> {
+        let now = self.now.get();
+        // Days are far below where an f64 stops being exact.
+        #[allow(clippy::cast_precision_loss)]
+        now.hours.map(|hours| hours + 24.0 * now.days_before as f64)
+    }
+
+    /// Says the clock has just been set, not passed: the hour it now reads
+    /// is not told to `onHour`.
+    fn set_told(&self) {
+        let told = self.clock_hours().map(whole_hours);
+        self.change(|now| now.told = told);
+    }
+
+    /// `game.sky.setHour`: `hours` from midnight at the start of the sky's
+    /// date, as the sky has always read it. The clock's day is today plus
+    /// the whole days in `hours`: an hour below 24 sets the watch within
+    /// today. Tells nothing.
+    pub(crate) fn set_sky_hour(&self, hours: f64) {
         let hours = hours.max(0.0);
         self.change(|now| {
-            // The hour a clock is first set to has not passed: it is where
-            // the clock starts.
-            if now.hours.is_none() {
-                now.told = Some(whole_hours(hours));
-            }
+            // The days the clock has counted to the start of today.
+            let today = now
+                .hours
+                .map_or(0, |was| now.days_before.saturating_add(whole_days(was)));
             now.hours = Some(hours);
+            now.days_before = today;
         });
-        self.changed.set(true);
+        self.set_told();
+    }
+
+    /// `game.sky.setDate`: the date said becomes the sky's today. The hour
+    /// keeps only its time of day, as the sky has always done; the days it
+    /// held stay on the clock.
+    pub(crate) fn start_calendar_today(&self) {
+        if let Some(hours) = self.hours()
+            && hours >= 24.0
+        {
+            self.change(|now| {
+                now.days_before = now.days_before.saturating_add(whole_days(hours));
+                now.hours = Some(hours.rem_euclid(24.0));
+            });
+        }
+    }
+
+    /// The whole days since the sky's date, for `game.sky.date()`.
+    pub(crate) fn days_since_date(&self) -> i64 {
+        self.hours().map_or(0, whole_days)
     }
 
     pub(crate) fn day_minutes(&self) -> f64 {
@@ -99,9 +152,12 @@ impl DayClock {
     /// none was said.
     pub(crate) fn set_day_minutes(&self, minutes: f64) {
         let minutes = minutes.clamp(0.0, LONGEST_DAY);
-        self.change(|now| now.day_minutes = minutes);
+        self.now.set(WorldClock {
+            day_minutes: minutes,
+            ..self.now.get()
+        });
         if minutes > 0.0 && self.hours().is_none() {
-            self.set_hours(12.0);
+            self.start_at(12.0);
         }
     }
 
@@ -112,7 +168,6 @@ impl DayClock {
             self.change(|now| {
                 now.hours = Some(hours + f64::from(step) * 24.0 / (now.day_minutes * 60.0));
             });
-            self.changed.set(true);
         }
     }
 
@@ -123,31 +178,32 @@ impl DayClock {
 
     /// The day it is, counted from 1, if a time has been said.
     pub(crate) fn day(&self) -> Option<u32> {
+        let now = self.now.get();
+        let days = now.days_before.saturating_add(whole_days(now.hours?));
         // Held to what a u32 holds: an hour count of 1e300 is still a day.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        self.hours()
-            .map(|hours| ((hours / 24.0).floor().clamp(0.0, f64::from(u32::MAX - 1)) as u32) + 1)
+        Some(days.clamp(0, i64::from(u32::MAX - 1)) as u32 + 1)
     }
 
     /// Moves the clock forward to the next time it is `hour` o'clock (from
     /// 0 up to 24): later today, or tomorrow if that has gone by. It never
-    /// goes back. An unset clock is set to that hour of day 1.
+    /// goes back, and the hours it passes are told. An unset clock is set to
+    /// that hour of day 1.
     pub(crate) fn move_to(&self, hour: f64) {
         let hour = hour.rem_euclid(24.0);
-        let hours = match self.hours() {
-            None => hour,
-            Some(hours) => {
-                // Whole days are exact in an f64, so the hour arrived at is
-                // exactly the one said and not a hair before it.
-                let midnight = (hours / 24.0).floor() * 24.0;
-                if midnight + hour >= hours {
-                    midnight + hour
-                } else {
-                    midnight + 24.0 + hour
-                }
-            }
+        let Some(hours) = self.hours() else {
+            self.start_at(hour);
+            return;
         };
-        self.set_hours(hours);
+        // Whole days are exact in an f64, so the hour arrived at is exactly
+        // the one said and not a hair before it.
+        let midnight = (hours / 24.0).floor() * 24.0;
+        let to = if midnight + hour >= hours {
+            midnight + hour
+        } else {
+            midnight + 24.0 + hour
+        };
+        self.change(|now| now.hours = Some(to));
     }
 
     /// Sets the clock to `hour` o'clock (from 0 up to 24) today, back or
@@ -157,9 +213,8 @@ impl DayClock {
         let midnight = self
             .hours()
             .map_or(0.0, |hours| (hours / 24.0).floor() * 24.0);
-        let hours = midnight + hour.rem_euclid(24.0);
-        self.set_hours(hours);
-        self.change(|now| now.told = Some(whole_hours(hours)));
+        self.change(|now| now.hours = Some(midnight + hour.rem_euclid(24.0)));
+        self.set_told();
     }
 
     /// The time of day as a game writes it: "8:00", "20:05".
@@ -176,29 +231,37 @@ impl DayClock {
         self.changed.take().then(|| self.hours()).flatten()
     }
 
-    /// Calls `tell` with each whole hour of the day (0 to 23) the clock has
-    /// come to since this was last asked, in order. A clock set forward
-    /// tells each hour it passed, but no more than the last day of them; a
-    /// clock set back, or set for the first time, tells nothing.
-    pub(crate) fn hours_due(&self, mut tell: impl FnMut(u8)) {
-        let Some(hours) = self.hours() else {
-            return;
+    /// The next whole hour of the day (0 to 23) the clock has come to and
+    /// not yet told, marked as told. A clock moved forward tells each hour
+    /// it passed, but no more than the last day of them; a clock set, back
+    /// or forward, tells nothing. Asked one hour at a time, so a function
+    /// told of one hour that sets the clock stops the hours after it.
+    pub(crate) fn next_due(&self) -> Option<u8> {
+        let now = whole_hours(self.clock_hours()?);
+        let Some(told) = self.now.get().told else {
+            // A clock restored without it: where it is has been told.
+            self.set_told();
+            return None;
         };
-        let now = whole_hours(hours);
-        let told = self.now.get().told;
-        self.change(|clock| clock.told = Some(now));
-        let Some(told) = told else {
-            return;
-        };
-        if now <= told {
-            return;
+        let next = told.saturating_add(1).max(now.saturating_sub(23));
+        if next > now {
+            return None;
         }
-        for hour in (told + 1).max(now - 23)..=now {
-            // From 0 to 23 by rem_euclid.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            tell(hour.rem_euclid(24) as u8);
-        }
+        let mut state = self.now.get();
+        state.told = Some(next);
+        self.now.set(state);
+        // From 0 to 23 by rem_euclid.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(next.rem_euclid(24) as u8)
     }
+}
+
+/// The whole days in `hours`, held to some millions of years either way so
+/// an hour of 1e300 cannot carry the count past what an i64 holds.
+fn whole_days(hours: f64) -> i64 {
+    #[allow(clippy::cast_possible_truncation)]
+    let days = (hours / 24.0).floor().clamp(-1e9, 1e9) as i64;
+    days
 }
 
 /// The whole hours in `hours`, held to what an i64 holds: no game lives
@@ -462,14 +525,12 @@ mod tests {
 
     fn at(hours: f64) -> DayClock {
         let clock = DayClock::default();
-        clock.set_hours(hours);
+        clock.set_sky_hour(hours);
         clock
     }
 
     fn due(clock: &DayClock) -> Vec<u8> {
-        let mut told = Vec::new();
-        clock.hours_due(|hour| told.push(hour));
-        told
+        std::iter::from_fn(|| clock.next_due()).collect()
     }
 
     #[test]
@@ -526,19 +587,44 @@ mod tests {
             due(&clock).is_empty(),
             "setting a time is not an hour passing"
         );
-        clock.set_hours(23.9);
+        clock.move_to(23.9);
         assert_eq!(due(&clock), [23]);
-        clock.set_hours(26.0);
+        clock.move_to(2.0);
         assert_eq!(due(&clock), [0, 1, 2]);
         assert!(due(&clock).is_empty());
-        // Back in time tells nothing, and goes on from there.
-        clock.set_hours(10.2);
+        // Setting the watch, back or forward, tells nothing, and the hours
+        // go on from there.
+        clock.start_at(10.2);
         assert!(due(&clock).is_empty());
-        clock.set_hours(11.0);
+        clock.set_sky_hour(20.0);
+        assert!(due(&clock).is_empty());
+        clock.start_at(10.2);
+        clock.move_to(11.0);
         assert_eq!(due(&clock), [11]);
-        // A week later tells the last day of hours, once each.
-        clock.set_hours(11.0 + 24.0 * 7.0);
+        // A week passing in one go tells the last day of hours, once each.
+        clock.set_day_minutes(1.0);
+        clock.step(7.0 * 60.0);
         assert_eq!(due(&clock), (12..24).chain(0..12).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn an_hour_below_24_said_to_the_sky_sets_the_watch_and_keeps_the_day() {
+        let clock = at(30.0);
+        assert_eq!(
+            (clock.text().as_deref(), clock.day()),
+            (Some("6:00"), Some(2))
+        );
+        // The sky reads its hour as it always has, from its own date.
+        clock.set_sky_hour(7.0);
+        assert_eq!((clock.hours(), clock.day()), (Some(7.0), Some(2)));
+        assert_eq!(clock.days_since_date(), 0);
+        // Past 24 runs on into the days after today.
+        clock.set_sky_hour(25.0);
+        assert_eq!((clock.hours(), clock.day()), (Some(25.0), Some(3)));
+        // A new date takes the days the hour held; the clock keeps them.
+        clock.start_calendar_today();
+        assert_eq!((clock.hours(), clock.day()), (Some(1.0), Some(3)));
+        assert!(due(&clock).is_empty(), "setting tells nothing");
     }
 
     #[test]

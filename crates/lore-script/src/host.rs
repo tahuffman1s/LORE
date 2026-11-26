@@ -1177,6 +1177,13 @@ impl ScriptHost {
         self.weather.day.time_of_day()
     }
 
+    /// The time of day on the world's clock as a game writes it ("8:00"),
+    /// or `None` while the clock is unset: what `game.clock.time` gives.
+    #[must_use]
+    pub fn clock_text(&self) -> Option<String> {
+        self.weather.day.text()
+    }
+
     /// The day it is on the world's clock, counted from 1 (`game.clock.day`),
     /// or `None` while the clock is unset.
     #[must_use]
@@ -1217,15 +1224,17 @@ impl ScriptHost {
         if self.paused || self.running.is_none() {
             return;
         }
-        let mut passed = [0_u8; 24];
-        let mut count = 0;
-        self.weather.day.hours_due(|hour| {
-            if let Some(slot) = passed.get_mut(count) {
-                *slot = hour;
-                count += 1;
+        // One hour at a time: a function told of one hour that sets the
+        // clock (back, or to a time it reads) stops the hours after it from
+        // being told as if they had passed. A day of hours at most a tick,
+        // so functions that keep skipping on cannot hold the tick forever.
+        for _ in 0..24 {
+            if self.paused {
+                break;
             }
-        });
-        for &hour in passed.iter().take(count) {
+            let Some(hour) = self.weather.day.next_due() else {
+                break;
+            };
             self.tell_hour(hour);
         }
     }

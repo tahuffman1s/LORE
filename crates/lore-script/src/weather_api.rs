@@ -740,7 +740,7 @@ pub(crate) fn sky(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                 }
             };
             rules_only(lua, &rules, "game.sky.setHour")?;
-            climate.day.set_hours(hour);
+            climate.day.set_sky_hour(hour);
             Ok(())
         })?,
     )?;
@@ -1003,11 +1003,11 @@ fn place(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
             rules_only(lua, &rules, "game.sky.setDate")?;
             // Small numbers: checked in `date`.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let today = lore_sky::days_from_2000(year, month as u32, day as u32);
-            // The day said is today. The clock keeps counting its days, so
-            // the calendar starts that many days earlier.
-            let first_day = today - days_passed(climate.day.hours());
+            let first_day = lore_sky::days_from_2000(year, month as u32, day as u32);
             climate.change_place(|place| place.first_day = first_day);
+            // The day said is today: the hour keeps its time of day, and the
+            // days it held stay on the world's clock (`game.clock.day`).
+            climate.day.start_calendar_today();
             Ok(())
         })?,
     )?;
@@ -1018,21 +1018,12 @@ fn place(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
             let Some(place) = climate.place.get() else {
                 return Ok((None, None, None));
             };
-            let passed = days_passed(climate.day.hours());
+            let passed = climate.day.days_since_date();
             let (year, month, day) = lore_sky::date_from_2000(place.first_day + passed);
             Ok((Some(year), Some(month), Some(day)))
         })?,
     )?;
     Ok(())
-}
-
-/// The whole days the clock has counted, held to some millions of years
-/// either way so an hour of 1e300 cannot carry the count past what an i64
-/// holds.
-fn days_passed(hours: Option<f64>) -> i64 {
-    #[allow(clippy::cast_possible_truncation)]
-    let passed = (hours.unwrap_or(0.0) / 24.0).floor().clamp(-1e9, 1e9) as i64;
-    passed
 }
 
 /// A number of degrees for `function`, or an error that says what it

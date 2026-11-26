@@ -3341,7 +3341,8 @@ declare game: {
         --- the morning, "20:30" half past eight at night. Setting it sets
         --- the clock to that time today, earlier or later, as a watch is
         --- set, and tells `onHour` nothing; the day stays. Set it at the top
-        --- of the file for the time the game starts at. It takes text from
+        --- of the file for the time the game starts at. Only time passing
+        --- (the day going by, or `skipTo`) moves the day on. It takes text from
         --- "0:00" to "23:59" ("24:00" is midnight too); for a number, set
         --- `hour`. To pass time, use `game.clock.skipTo`. nil until set.
         --- Example: game.clock.time = "8:00"
@@ -3356,7 +3357,9 @@ declare game: {
         hour: number?,
 
         --- Which day it is, counting the first as 1; it moves on at
-        --- midnight. Read only. nil until the clock is set.
+        --- midnight. Setting the time never moves it, nor does
+        --- `game.sky.setDate`; `game.sky.setHour` past 24 moves it a day on
+        --- for each 24. Read only. nil until the clock is set.
         --- Example: if game.clock.day == 3 then game.thing("Ship").visible = true end
         day: number?,
 
@@ -3376,8 +3379,10 @@ declare game: {
         --- order; `game.clock.time` then reads the time it came to. Setting
         --- `time` or `hour` tells nothing. Hours passed in a tick are told
         --- before that tick's `game.onTick`; while the game is paused they
-        --- wait. A jump of more than a day in one tick (several `skipTo`
-        --- calls, or `game.sky.setHour`) tells only the last 24 hours.
+        --- wait. A jump of more than a day in one tick tells only the last
+        --- 24 hours. A function that sets the time stops the hours after
+        --- its own from being told; one that skips on has the hours it
+        --- passed told next.
         --- Example: game.clock.onHour(20, function() print("Night falls") end)
         --- Example: game.clock.onHour(function(hour) print("It is " .. hour .. " o'clock") end)
         onHour: (hour: number | (hour: number) -> (), handler: ((hour: number) -> ())?) -> (),
@@ -3392,8 +3397,11 @@ declare game: {
         --- the land. Until a script says the hour it is always day, in the
         --- level's own light. To make time pass, say how long a day lasts
         --- with game.sky.setDayLength. It sets the world's clock, the same
-        --- one `game.clock` reads; unlike `game.clock.time` it can set
-        --- another day: `game.clock` is the easier way.
+        --- one `game.clock` reads, as a watch is set: it tells
+        --- `game.clock.onHour` nothing. The hour counts from midnight at the
+        --- start of the date last given to `setDate`, so an hour below 24
+        --- is that date and keeps `game.clock.day` where it is, and each 24
+        --- past it is a day later on both. `game.clock` is the easier way.
         --- Example: game.sky.setHour(18.5)
         setHour: (hour: number) -> (),
 
@@ -3554,7 +3562,10 @@ declare game: {
         --- Says what day it is: the year, the month (1 to 12) and the day.
         --- The moon has the phase it had that night, the sun the height of
         --- that season, and the date moves on at each midnight as the hours
-        --- pass. Today becomes that date; `game.clock.day` keeps counting.
+        --- pass. Today becomes that date: `game.sky.hour()` keeps its time
+        --- of day and drops the days it had run on over 24, and
+        --- `game.clock.day` and the time stay as they were. It can come
+        --- before or after `setHour`.
         --- Example: game.sky.setDate(2026, 3, 20)
         setDate: (year: number, month: number, day: number) -> (),
 
