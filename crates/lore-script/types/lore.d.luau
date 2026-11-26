@@ -2253,6 +2253,17 @@ declare game: {
         reach: number?,
         --- How fast it fires, in shots a minute.
         roundsPerMinute: number?,
+        --- The sound played for each shot; the engine's "gunshot" if left out.
+        --- Example: fireSound = "twang"
+        fireSound: string?,
+        --- The sound played when a reload begins; "reload" if left out.
+        reloadSound: string?,
+        --- The sound played when the trigger is pulled on an empty magazine;
+        --- "dry-fire" if left out.
+        emptySound: string?,
+        --- How many metres away a shot can be heard; 150 if left out.
+        --- Example: heardWithin = 20
+        heardWithin: number?,
         --- The wait after a burst before the next one.
         burstPause: number?,
         --- How long after the weapon is handed over before it can fire.

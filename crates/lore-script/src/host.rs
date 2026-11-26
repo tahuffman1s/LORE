@@ -1758,6 +1758,7 @@ impl ScriptHost {
             settings: kind.settings,
             model: kind.model,
             hold: kind.hold,
+            sounds: kind.sounds,
             state,
         })
     }
@@ -1780,6 +1781,7 @@ impl ScriptHost {
             settings: kind.settings,
             model: kind.model,
             hold: kind.hold,
+            sounds: kind.sounds,
             state,
         })
     }

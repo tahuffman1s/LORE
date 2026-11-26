@@ -24,12 +24,14 @@ use lore_script::SoundRequest;
 pub const SOUNDS_FOLDER: &str = "sounds";
 
 /// The sounds every game has without a file of its own, in order.
-pub const STARTER_SOUNDS: [&str; 20] = [
+pub const STARTER_SOUNDS: [&str; 22] = [
     "bubbles",
     "drip",
     "dry-fire",
+    "explosion",
     "footstep",
     "gunshot",
+    "impact",
     "landing",
     "menu-choose",
     "menu-move",
@@ -460,8 +462,28 @@ fn starters() -> BTreeMap<String, Entry> {
     let close = Range::default();
     let entries = [
         ("dry-fire", one(starter::dry_fire(), close)),
+        (
+            "explosion",
+            one(
+                starter::explosion(),
+                Range {
+                    near: 10.0,
+                    far: 300.0,
+                },
+            ),
+        ),
         ("footstep", takes(starter::footsteps(), Range::FOOTSTEP)),
         ("gunshot", takes(starter::gunfire(), Range::GUNFIRE)),
+        (
+            "impact",
+            one(
+                starter::impact(),
+                Range {
+                    near: 1.0,
+                    far: 40.0,
+                },
+            ),
+        ),
         ("landing", one(starter::landing(), Range::FOOTSTEP)),
         // What the menu kit a new game comes with plays.
         ("menu-choose", one(starter::menu_choose(), close)),

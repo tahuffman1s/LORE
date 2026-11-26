@@ -86,14 +86,14 @@ pub(crate) fn tick(
     let surface = level.water_around(player.position);
     let Some(surface) = surface.filter(|_| player.submerged > 0.0) else {
         if was_under {
-            noises.push(Noise {
-                kind: NoiseKind::Surface,
-                position: player.position,
-                loudness: 0.8,
-                pitch: 1.0,
-                delay: 0.0,
+            noises.push(Noise::new(
+                NoiseKind::Surface,
+                player.position,
+                0.8,
+                1.0,
+                0.0,
                 tick,
-            });
+            ));
         }
         return;
     };
@@ -115,13 +115,15 @@ pub(crate) fn tick(
     let (pitch, quiet) = level
         .pool_around(player.position)
         .map_or((1.0, 1.0), |here| voice(here.medium));
-    let noise = |kind: NoiseKind, loudness: f32| Noise {
-        kind,
-        position: [x, surface, z],
-        loudness: (loudness * quiet).clamp(0.0, 1.0),
-        pitch,
-        delay: 0.0,
-        tick,
+    let noise = |kind: NoiseKind, loudness: f32| {
+        Noise::new(
+            kind,
+            [x, surface, z],
+            (loudness * quiet).clamp(0.0, 1.0),
+            pitch,
+            0.0,
+            tick,
+        )
     };
 
     // Into the water from the air, fast enough to be a splash and not a

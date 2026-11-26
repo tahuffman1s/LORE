@@ -9,6 +9,8 @@
 
 use lore_audio::{Feet, Footfall, FootstepSettings, Footsteps, Play, Range};
 
+use lore_script::SoundName;
+
 use crate::sounds::Sounds;
 
 /// What made a noise.
@@ -47,6 +49,10 @@ pub enum NoiseKind {
     Thunder,
     /// Thunder from far off: the rumble alone.
     FarThunder,
+    /// A rocket or grenade going off, heard from where it did.
+    Explosion,
+    /// A bullet or a rocket striking a surface, heard from where it did.
+    Impact,
 }
 
 impl NoiseKind {
@@ -72,6 +78,8 @@ impl NoiseKind {
             Self::Pour => "splash-small",
             Self::Thunder => "thunder",
             Self::FarThunder => "thunder-far",
+            Self::Explosion => "explosion",
+            Self::Impact => "impact",
         }
     }
 
@@ -80,7 +88,10 @@ impl NoiseKind {
     /// both ears.
     #[must_use]
     pub const fn is_at_a_place(self) -> bool {
-        matches!(self, Self::Patter | Self::Pour)
+        matches!(
+            self,
+            Self::Patter | Self::Pour | Self::Explosion | Self::Impact
+        )
     }
 
     /// Whether it is a foot coming down on the ground: a step or a landing.
@@ -120,6 +131,15 @@ impl NoiseKind {
                 near: 3_000.0,
                 far: 30_000.0,
             },
+            // A blast is heard across a valley.
+            Self::Explosion => Range {
+                near: 10.0,
+                far: 300.0,
+            },
+            Self::Impact => Range {
+                near: 1.0,
+                far: 40.0,
+            },
             Self::DryFire | Self::Reload => Range {
                 near: 1.0,
                 far: 50.0,
@@ -148,6 +168,45 @@ pub struct Noise {
     pub delay: f32,
     /// The tick it was made on.
     pub tick: u32,
+    /// How far it carries. The kind's own range unless what made it
+    /// (a weapon that says `heardWithin`) set another.
+    pub range: Range,
+    /// The sound it is played with, when what made it named one (a weapon's
+    /// `fireSound`). `None` plays the kind's own: [`NoiseKind::sound`].
+    pub sound: Option<SoundName>,
+}
+
+impl Noise {
+    /// A noise of `kind` made at `position`, with the kind's own sound and
+    /// range.
+    #[must_use]
+    pub fn new(
+        kind: NoiseKind,
+        position: [f32; 3],
+        loudness: f32,
+        pitch: f32,
+        delay: f32,
+        tick: u32,
+    ) -> Self {
+        Self {
+            kind,
+            position,
+            loudness,
+            pitch,
+            delay,
+            tick,
+            range: kind.range(),
+            sound: None,
+        }
+    }
+
+    /// The name of the sound it is played with.
+    #[must_use]
+    pub fn sound_name(&self) -> &str {
+        self.sound
+            .as_ref()
+            .map_or_else(|| self.kind.sound(), SoundName::as_str)
+    }
 }
 
 /// Works out when the player's feet come down. A new one has walked
@@ -183,14 +242,7 @@ impl Walking {
             Some(Footfall::Landing { volume }) => (NoiseKind::Landing, volume),
             None => return,
         };
-        noises.push(Noise {
-            kind,
-            position: player.position,
-            loudness,
-            pitch: 1.0,
-            delay: 0.0,
-            tick,
-        });
+        noises.push(Noise::new(kind, player.position, loudness, 1.0, 0.0, tick));
     }
 }
 
@@ -200,12 +252,12 @@ impl Walking {
 /// when the game has no sound of that name ready.
 pub(crate) fn play(noise: &Noise, nth: u32, sounds: &mut Sounds) -> Option<Play> {
     let seed = noise.tick.wrapping_mul(31).wrapping_add(nth);
-    let mut play = sounds.take(noise.kind.sound(), seed)?;
+    let mut play = sounds.take(noise.sound_name(), seed)?;
     play.volume *= noise.loudness;
     if noise.pitch.is_finite() {
         play.pitch = (play.pitch * noise.pitch).clamp(0.25, 4.0);
     }
-    play.range = noise.kind.range();
+    play.range = noise.range;
     if noise.kind.is_at_a_place() {
         play.place = lore_audio::Place::At(noise.position);
     }

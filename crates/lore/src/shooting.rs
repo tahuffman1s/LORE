@@ -16,6 +16,8 @@ use lore_weapons::{
     hitscan, shot_seed,
 };
 
+use lore_audio::Range;
+
 use crate::noise::{Noise, NoiseKind};
 use crate::world::{Body, Dummy};
 
@@ -52,6 +54,11 @@ pub(crate) struct Shooting {
     /// Where the camera is when it is not at the eyes (third person): shots
     /// go to what its crosshair is on, fired from the body.
     pub(crate) camera: Option<[f32; 3]>,
+}
+
+/// A bullet or a rocket striking the level at `point`.
+fn struck_noise(point: [f32; 3], tick: u32) -> Noise {
+    Noise::new(NoiseKind::Impact, point, 0.6, 1.0, 0.0, tick)
 }
 
 /// How far off the crosshair's mark is taken to be when it is on nothing:
@@ -253,7 +260,7 @@ impl Shooting {
     ) {
         self.told.clear();
         self.fire(player, dummies, tick, level, rules, step, host, noises);
-        self.fly(player, dummies, level, rules, step);
+        self.fly(player, dummies, tick, level, rules, step, noises);
         // Told last, and in the order it happened: a function of the
         // script's may hand out or take away weapons, which must not change
         // what this tick's shots were.
@@ -334,17 +341,32 @@ impl Shooting {
             host.set_weapon_state(CharacterId::PLAYER, held.state);
         }
         let eyes = body.player.eye_position();
-        let heard = |kind, delay: f32| Noise {
-            kind,
-            position: eyes,
-            loudness: 1.0,
-            pitch: 1.0,
-            delay: if delay.is_finite() {
+        let sounds = held.sounds;
+        let heard = |kind: NoiseKind, delay: f32| {
+            let delay = if delay.is_finite() {
                 delay.clamp(0.0, step.max(0.0))
             } else {
                 0.0
-            },
-            tick,
+            };
+            let mut noise = Noise::new(kind, eyes, 1.0, 1.0, delay, tick);
+            noise.sound = match kind {
+                NoiseKind::Gunshot => sounds.fire,
+                NoiseKind::DryFire => sounds.empty,
+                NoiseKind::Reload => sounds.reload,
+                _ => None,
+            };
+            if kind == NoiseKind::Gunshot
+                && let Some(far) = sounds.heard_within
+            {
+                // How far it is heard sets how far it is at full volume in
+                // the same proportion as the engine's own gunfire.
+                let usual = Range::GUNFIRE;
+                noise.range = Range {
+                    near: far * usual.near / usual.far,
+                    far,
+                };
+            }
+            noise
         };
         // A blast of pellets is one shot, and is heard once: when its
         // first pellet left.
@@ -358,7 +380,7 @@ impl Shooting {
             noises.push(heard(NoiseKind::DryFire, 0.0));
         }
         if !self.shots.is_empty() {
-            self.land(body, dummies, level, rules, &held);
+            self.land(body, dummies, tick, level, rules, &held, noises);
         }
         // An empty magazine starts its reload after the shot that emptied it.
         if events.reload_started {
@@ -368,14 +390,18 @@ impl Shooting {
     }
 
     /// Judges the shots a weapon has just fired: bullets land at once, and
-    /// anything slower is launched.
+    /// anything slower is launched. A bullet that strikes the level is
+    /// heard to.
+    #[allow(clippy::too_many_arguments)]
     fn land(
         &mut self,
         body: &Body,
         dummies: &[Dummy],
+        tick: u32,
         level: &Level,
         rules: &MoveSettings,
         held: &HeldWeapon,
+        noises: &mut Vec<Noise>,
     ) {
         let Body { player, asked } = *body;
         let (eyes, yaw, pitch) = (player.eye_position(), asked.movement.yaw, asked.pitch);
@@ -400,7 +426,10 @@ impl Shooting {
                         continue;
                     };
                     let (victim, part) = match hit.struck {
-                        Struck::Level => (None, None),
+                        Struck::Level => {
+                            noises.push(struck_noise(hit.point, tick));
+                            (None, None)
+                        }
                         Struck::Target { id, zone } => (name_of(dummies, id), Some(zone)),
                     };
                     self.told.push(Told::Hit(WeaponHit {
@@ -451,13 +480,17 @@ impl Shooting {
     }
 
     /// Flies everything launched by one tick, through where everyone is now.
+    /// A strike on the level and an explosion are heard from where they were.
+    #[allow(clippy::too_many_arguments)]
     fn fly(
         &mut self,
         player: &Body,
         dummies: &[Dummy],
+        tick: u32,
         level: &Level,
         rules: &MoveSettings,
         step: f32,
+        noises: &mut Vec<Noise>,
     ) {
         if self.in_flight.is_empty() {
             return;
@@ -487,12 +520,16 @@ impl Shooting {
             match flight {
                 Flight::Struck(struck) => {
                     let (victim, part) = match struck.struck {
-                        Struck::Level => (None, None),
+                        Struck::Level => {
+                            noises.push(struck_noise(struck.point, tick));
+                            (None, None)
+                        }
                         Struck::Target { id, zone } => (name_of(dummies, id), Some(zone)),
                     };
                     told.push(hit(victim, part, struck.damage, struck.point, false));
                 }
                 Flight::Exploded { point, .. } => {
+                    noises.push(Noise::new(NoiseKind::Explosion, point, 1.0, 1.0, 0.0, tick));
                     told.push(hit(None, None, 0.0, point, true));
                     for target in targets {
                         let damage = blast_damage(level, &flying.settings, point, target);

@@ -99,8 +99,14 @@ impl Played {
         self.loudest = [0.0; 2];
     }
 
+    /// What was heard, leaving out where bullets landed: recoil sends some
+    /// into the floor, which is its own noise ([`NoiseKind::Impact`]).
     fn kinds(&self) -> Vec<NoiseKind> {
-        self.noises.iter().map(|noise| noise.kind).collect()
+        self.noises
+            .iter()
+            .map(|noise| noise.kind)
+            .filter(|kind| *kind != NoiseKind::Impact)
+            .collect()
     }
 
     fn feet(&self) -> [f32; 3] {
@@ -203,7 +209,11 @@ fn a_weapon_is_heard_firing_running_dry_and_being_reloaded() {
             Gunshot, Gunshot, Gunshot, DryFire, Reload, Gunshot, Gunshot, Gunshot
         ]
     );
-    for noise in &played.noises {
+    for noise in played
+        .noises
+        .iter()
+        .filter(|noise| noise.kind != NoiseKind::Impact)
+    {
         assert!(noise.loudness == 1.0);
         assert!(distance(noise.position, eyes) < 0.05, "{noise:?}");
         assert!((0.0..=STEP).contains(&noise.delay), "{noise:?}");
