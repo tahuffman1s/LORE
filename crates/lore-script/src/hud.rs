@@ -18,6 +18,7 @@ use std::rc::Rc;
 
 use lore_ui::{Anchor, Color};
 
+mod animate;
 mod style;
 
 use mlua::{AnyUserData, Function, Lua, MetaMethod, Table, UserData, UserDataMethods, Value};
@@ -142,8 +143,7 @@ pub(crate) const IMAGE_FIELDS: &[&str] = &[
 ];
 pub(crate) const GRAPH_FIELDS: &[&str] =
     &["visible", "layer", "right", "down", "hovered", "pressed"];
-#[cfg(test)]
-pub(crate) const PIECE_METHODS: &[&str] = &["remove", "pointerAt"];
+pub(crate) const PIECE_METHODS: &[&str] = &["remove", "pointerAt", "animate"];
 
 /// The most pieces a HUD holds. Far more than a game shows at once, with
 /// room for a few menus of rows that are made once and hidden until they
@@ -517,7 +517,6 @@ impl Entry {
 
     /// The number in the field `field`, for the fields a number can be
     /// animated in: `None` for any other, or one this piece lacks.
-    #[allow(dead_code, reason = "piece:animate reads the number it starts from")]
     fn number(&self, field: &str) -> Option<f32> {
         let look = self
             .piece
@@ -551,7 +550,6 @@ impl Entry {
     /// Sets the number in the field `field`, held to what the field can
     /// be, as setting it from a script does. Says whether the piece
     /// changed; a field this piece lacks is left alone.
-    #[allow(dead_code, reason = "piece:animate steps numbers through this")]
     fn set_number(&mut self, field: &str, value: f32) -> bool {
         if !value.is_finite() || self.number(field).is_none() {
             return false;
@@ -608,7 +606,6 @@ impl Entry {
 
     /// Sets a colour field, `color` or `borderColor`. The colour is read
     /// back as a hex code, as it was not written as text.
-    #[allow(dead_code, reason = "piece:animate steps colours through this")]
     fn set_color(&mut self, field: &str, color: Color) -> bool {
         match field {
             "color" if !matches!(self.piece.shape, HudShape::Graph { .. }) => {
@@ -625,7 +622,6 @@ impl Entry {
     }
 
     /// The colour in a colour field, `color` or `borderColor`.
-    #[allow(dead_code, reason = "piece:animate reads the colour it starts from")]
     fn colour(&self, field: &str) -> Option<Color> {
         match field {
             "color" if !matches!(self.piece.shape, HudShape::Graph { .. }) => {
@@ -666,6 +662,10 @@ pub(crate) struct HudState {
     changed: Cell<bool>,
     /// The piece the pointer is holding down, if any: its id.
     pressed: Cell<Option<u64>>,
+    /// The animations running, oldest first.
+    animations: RefCell<Vec<animate::Animation>>,
+    /// The `onDone` functions of animations that finished, not yet called.
+    done: RefCell<Vec<Function>>,
 }
 
 impl HudState {
@@ -753,6 +753,10 @@ impl HudState {
         let mut pieces = self.pieces.borrow_mut();
         if let Ok(place) = pieces.binary_search_by_key(&id, |entry| entry.id) {
             pieces.remove(place);
+            // Its animations end without calling their `onDone`.
+            self.animations
+                .borrow_mut()
+                .retain(|animation| animation.id != id);
             if self.pressed.get() == Some(id) {
                 self.pressed.set(None);
             }
@@ -829,8 +833,11 @@ fn no_such_field(lua: &Lua, kind: Kind, key: &str) -> mlua::Error {
     let word = kind.word();
     let mut message = format!("{} has nothing called `{key}`.", capitalised(kind.name()));
     let fields = kind.fields();
-    match closest(key, fields.iter().copied().chain(["remove", "pointerAt"])) {
-        Some(method @ ("remove" | "pointerAt")) => {
+    match closest(
+        key,
+        fields.iter().copied().chain(PIECE_METHODS.iter().copied()),
+    ) {
+        Some(method @ ("remove" | "pointerAt" | "animate")) => {
             let _ = write!(
                 message,
                 " Did you mean `{method}`? Write it with a colon: {word}:{method}()"
@@ -897,6 +904,7 @@ impl UserData for PieceRef {
             hud_of(lua)?.hud.remove(piece.id);
             Ok(())
         });
+        methods.add_function("animate", animate::animate);
         methods.add_function("pointerAt", |lua, this: Value| {
             let piece = match &this {
                 Value::UserData(this) => this.borrow::<Self>().ok().map(|this| *this),
@@ -948,7 +956,15 @@ impl UserData for PieceRef {
                         // How big the words are drawn, measured in the HUD's
                         // own font, for laying other pieces out round them.
                         ("width" | "height", HudShape::Text { text, size }) => {
-                            let measured = shared.tools.text_size(text, *size);
+                            let (font, spacing) = entry
+                                .piece
+                                .style
+                                .as_deref()
+                                .map_or_else(Default::default, |held| {
+                                    (held.look.font, held.look.letter_spacing)
+                                });
+                            let measured =
+                                shared.tools.text_size_styled(text, *size, font, spacing);
                             Ok(Value::Number(f64::from(
                                 measured[usize::from(key == "height")],
                             )))
@@ -1284,7 +1300,17 @@ fn area(shared: &Shared, entry: &Entry) -> [f32; 4] {
     let screen = shared.input.borrow().screen;
     let piece = &entry.piece;
     let size = match &piece.shape {
-        HudShape::Text { size, .. } => shared.tools.text_size(&entry.ruled.text, *size),
+        HudShape::Text { size, .. } => {
+            let (font, spacing) = piece
+                .style
+                .as_deref()
+                .map_or_else(Default::default, |held| {
+                    (held.look.font, held.look.letter_spacing)
+                });
+            shared
+                .tools
+                .text_size_styled(&entry.ruled.text, *size, font, spacing)
+        }
         HudShape::Bar { size, .. }
         | HudShape::Box { size, .. }
         | HudShape::Graph { size, .. }

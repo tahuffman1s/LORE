@@ -443,6 +443,7 @@ game.onDraw(function()
         slider.value = math.clamp(slider:pointerAt(), 0, 1)
     end
     local across: number, down: number = graph:pointerAt()
+    slider:animate({ opacity = 0.5, color = "red", value = 1 }, { seconds = 0.5, ease = "ease-out", delay = 0.1, onDone = function() slider:animate({ opacity = 1 }) end })
     graph.visible = not plain.hovered and not plain.pressed
     print(across, down, fps.hovered, fps.pressed, hint.pressed)
 end)

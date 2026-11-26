@@ -916,3 +916,211 @@ fn a_known_font_family_is_found_whatever_its_capitals_and_reads_back_as_the_fold
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     assert_eq!(said(&host), ["Atkinson Hyperlegible Next", "nil"]);
 }
+
+// ---- Animation -------------------------------------------------------
+
+fn bar_value(host: &ScriptHost, place: usize) -> f32 {
+    match &pieces(host)[place].shape {
+        HudShape::Bar { value, .. } => *value,
+        other => panic!("not a bar: {other:?}"),
+    }
+}
+
+fn ticks(host: &mut ScriptHost, count: usize) {
+    for _ in 0..count {
+        tick(host);
+    }
+}
+
+#[test]
+fn half_a_second_of_ticks_lands_exactly() {
+    let mut host = running(
+        r#"local bar = game.hud.bar(0)
+        game.onStart(function() bar:animate({ value = 1 }, { seconds = 0.5, ease = "linear" }) end)"#,
+    );
+    ticks(&mut host, 15);
+    assert!((bar_value(&host, 0) - 0.5).abs() < 1e-6);
+    ticks(&mut host, 14);
+    assert!(bar_value(&host, 0) < 1.0);
+    tick(&mut host);
+    assert_eq!(bar_value(&host, 0), 1.0);
+    ticks(&mut host, 5);
+    assert_eq!(bar_value(&host, 0), 1.0);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
+
+#[test]
+fn a_delay_waits_before_moving() {
+    let mut host = running(
+        r#"local bar = game.hud.bar(0)
+        game.onStart(function() bar:animate({ value = 1 }, { seconds = 0.5, ease = "linear", delay = 0.1 }) end)"#,
+    );
+    ticks(&mut host, 6);
+    assert_eq!(bar_value(&host, 0), 0.0);
+    tick(&mut host);
+    assert!(bar_value(&host, 0) > 0.0);
+    ticks(&mut host, 29);
+    assert_eq!(bar_value(&host, 0), 1.0);
+}
+
+#[test]
+fn on_done_is_called_once_after_every_field_arrives() {
+    let mut host = saying(
+        r#"local box = game.hud.box()
+        game.onStart(function()
+            box:animate({ opacity = 0.5, right = 10 }, { seconds = 0.25, onDone = function()
+                say(box.opacity, box.right)
+            end })
+        end)"#,
+    );
+    ticks(&mut host, 14);
+    assert_eq!(said(&host), [""]);
+    ticks(&mut host, 60);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(said(&host), ["0.5,10"]);
+}
+
+#[test]
+fn a_new_animation_of_a_field_takes_over_from_where_it_is() {
+    let mut host = saying(
+        r#"local bar = game.hud.bar(0)
+        local first = 0
+        game.onStart(function()
+            bar:animate({ value = 1 }, { seconds = 1, ease = "linear", onDone = function() say("first") end })
+        end)
+        game.after(0.5, function()
+            bar:animate({ value = 0 }, { seconds = 1, ease = "linear" })
+        end)"#,
+    );
+    // The timer is called on tick 30; the first animation has had 30 steps.
+    ticks(&mut host, 31);
+    let at = bar_value(&host, 1);
+    // 0.5 at the takeover, then one step of the new one back down.
+    assert!((at - (0.5 - 0.5 / 60.0)).abs() < 1e-4, "{at}");
+    ticks(&mut host, 59);
+    assert_eq!(bar_value(&host, 1), 0.0);
+    assert_eq!(said(&host), [""]);
+}
+
+#[test]
+fn an_animation_of_other_fields_leaves_the_first_running() {
+    let mut host = running(
+        r#"local box = game.hud.box()
+        game.onStart(function()
+            box:animate({ right = 60 }, { seconds = 1, ease = "linear" })
+            box:animate({ down = 30 }, { seconds = 0.5, ease = "linear" })
+        end)"#,
+    );
+    ticks(&mut host, 60);
+    assert_eq!(pieces(&host)[0].offset, [60.0, 30.0]);
+}
+
+#[test]
+fn removing_a_piece_drops_its_animations_without_calling_on_done() {
+    let mut host = saying(
+        r#"local box = game.hud.box()
+        game.onStart(function()
+            box:animate({ right = 60 }, { seconds = 0.2, onDone = function() say("done") end })
+        end)
+        game.after(0.05, function() box:remove() end)"#,
+    );
+    ticks(&mut host, 120);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(said(&host), [""]);
+}
+
+#[test]
+fn only_the_pieces_that_animate_are_marked_changed() {
+    let mut host = running(
+        r#"local still = game.hud.bar(0.5)
+        local moving = game.hud.bar(0)
+        game.onStart(function() moving:animate({ value = 1 }, { seconds = 1 }) end)"#,
+    );
+    tick(&mut host);
+    assert_eq!(changed(&mut host), [1]);
+    ticks(&mut host, 100);
+    let _ = changed(&mut host);
+    tick(&mut host);
+    assert!(changed(&mut host).is_empty());
+}
+
+#[test]
+fn colours_move_a_channel_at_a_time() {
+    let mut host = running(
+        r##"local box = game.hud.box({ color = "#000000" })
+        game.onStart(function() box:animate({ color = "#ff8000", borderColor = "#ffffff" }, { seconds = 1, ease = "linear" }) end)"##,
+    );
+    ticks(&mut host, 30);
+    let piece = &pieces(&host)[0];
+    assert!((piece.color.r - 0.5).abs() < 1e-5, "{:?}", piece.color);
+    assert!((piece.color.g - 128.0 / 255.0 * 0.5).abs() < 1e-3);
+    ticks(&mut host, 30);
+    let piece = &pieces(&host)[0];
+    assert_eq!(
+        piece.color,
+        Color {
+            r: 1.0,
+            g: 128.0 / 255.0,
+            b: 0.0,
+            a: 1.0
+        }
+    );
+}
+
+#[test]
+fn two_games_given_the_same_input_have_the_same_values_every_tick() {
+    let script = r##"local box = game.hud.box({ color = "#102030" })
+        local bar = game.hud.bar(0)
+        game.onStart(function()
+            box:animate({ right = 91, opacity = 0.3, rotation = 33, color = "#ffcc00" }, { seconds = 0.7, ease = "ease" })
+            bar:animate({ value = 1 }, { seconds = 0.9, ease = "ease-in-out", delay = 0.13 })
+        end)
+        game.after(0.4, function() box:animate({ right = -20 }, { seconds = 0.5, ease = "ease-out" }) end)"##;
+    let (mut one, mut two) = (running(script), running(script));
+    for _ in 0..120 {
+        tick(&mut one);
+        tick(&mut two);
+        assert_eq!(pieces(&one), pieces(&two));
+    }
+    assert_eq!(bar_value(&one, 1), 1.0);
+}
+
+#[test]
+fn animate_mistakes_name_the_nearest_word_and_what_to_write() {
+    let error = mistake(r#"local b = game.hud.bar(1); b:animate({ opacty = 0 })"#);
+    assert!(error.contains("Did you mean `opacity`?"), "{error}");
+    let error = mistake(r#"local t = game.hud.text("x"); t:animate({ width = 10 })"#);
+    assert!(error.contains("no `width` to animate"), "{error}");
+    assert!(error.contains("opacity"), "{error}");
+    let error = mistake(r#"local b = game.hud.bar(1); b:animate({ value = 0 }, { secconds = 1 })"#);
+    assert!(error.contains("Did you mean `seconds`?"), "{error}");
+    let error =
+        mistake(r#"local b = game.hud.bar(1); b:animate({ value = 0 }, { ease = "ease-inout" })"#);
+    assert!(error.contains("Did you mean \"ease-in-out\"?"), "{error}");
+    let error = mistake(r#"local b = game.hud.bar(1); b:animate({ value = "full" })"#);
+    assert!(error.contains("needs a number"), "{error}");
+    let error = mistake(r#"local b = game.hud.bar(1); b:animate({ color = 5 })"#);
+    assert!(error.contains("needs a colour"), "{error}");
+    let error = mistake(r#"local b = game.hud.bar(1); b:animate({ value = 0 }, { seconds = -1 })"#);
+    assert!(error.contains("needs a number of seconds"), "{error}");
+    let error = mistake(r#"local b = game.hud.bar(1); b:animate({ value = 0 }, { onDone = 3 })"#);
+    assert!(error.contains("needs a function"), "{error}");
+    let error = mistake(r#"local b = game.hud.bar(1); b:animate({})"#);
+    assert!(error.contains("no fields"), "{error}");
+    let error = mistake(r#"local b = game.hud.bar(1); b.animate({ value = 0 })"#);
+    assert!(error.contains("colon"), "{error}");
+    let error = mistake(r#"local b = game.hud.bar(1); b:remove(); b:animate({ value = 0 })"#);
+    assert!(error.contains("taken off the HUD"), "{error}");
+}
+
+#[test]
+fn a_texts_width_counts_its_letter_spacing() {
+    let mut host = running(
+        r#"local t = game.hud.text("abcd", { size = 20 })
+        local plain = t.width
+        t.letterSpacing = 3
+        assert(math.abs(t.width - plain - 12) < 0.01, "spacing adds to the width")"#,
+    );
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}

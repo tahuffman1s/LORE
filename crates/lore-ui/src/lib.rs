@@ -89,7 +89,7 @@ pub use error::UiError;
 pub use fill::{Clip, Fill, FontFace, Stop, Transform};
 pub use hud_style::{BoxShadow, Gradient, HudStyle, MOST_STOPS, TextShadow};
 pub use input::{Direction, InputMode, UiInput};
-pub use layout::{hud_area, hud_line, hud_text_size};
+pub use layout::{hud_area, hud_line, hud_text_size, hud_text_size_styled};
 pub use node::{Anchor, ScreenId, WidgetId};
 pub use theme::{Color, EstimatedText, SMALLEST_TEXT, TextMeasure, Theme};
 pub use ui::{ButtonNames, Ui, UiEvent, Value};

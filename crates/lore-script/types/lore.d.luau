@@ -973,6 +973,19 @@ type HudBoxShadow = { right: number?, down: number?, blur: number?, spread: numb
 --- Example: panel.gradient = { colors = { "#3a2a10", "#120c04" }, angle = 180 }
 type HudGradient = { colors: { string }, angle: number?, stops: { number }?, radial: boolean?, center: { number }? }
 
+--- What `piece:animate` moves a piece to: any of the number fields the
+--- piece has (a text has no `width`; a bar has `value`; a line has
+--- `toRight`, `toDown` and `thickness`) and the colours `color` and
+--- `borderColor`. `borderRadius` and `borderWidth` take one number.
+--- Example: health:animate({ opacity = 0.4, color = "red" }, { seconds = 0.5 })
+type HudAnimateGoals = { right: number?, down: number?, width: number?, height: number?, opacity: number?, scale: number?, rotation: number?, borderRadius: number?, borderWidth: number?, letterSpacing: number?, value: number?, thickness: number?, toRight: number?, toDown: number?, color: string?, borderColor: string? }
+
+--- How `piece:animate` runs: `seconds` it takes (0.3 if not said), `ease`
+--- its shape ("ease" if not said), `delay` seconds before it starts, and
+--- `onDone`, called once when every field has arrived.
+--- Example: panel:animate({ right = 0 }, { seconds = 0.4, ease = "ease-out", delay = 0.1, onDone = function() print("In") end })
+type HudAnimateOptions = { seconds: number?, ease: ("linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out")?, delay: number?, onDone: (() -> ())? }
+
 --- Text on the HUD: what `game.hud.text` gives. Keep it to change it later.
 --- Example: local ammo = game.hud.text("30 / 90", { at = "bottom right" })
 declare extern type HudText with
@@ -1097,6 +1110,13 @@ declare extern type HudText with
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: local across, down = ammo:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A bar on the HUD, such as health: what `game.hud.bar` gives.
@@ -1190,6 +1210,13 @@ declare extern type HudBar with
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: if bar.pressed then volume = math.clamp(bar:pointerAt(), 0, 1); bar.value = volume end
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A plain box on the HUD, such as a crosshair dot or a panel behind text:
@@ -1320,6 +1347,13 @@ declare extern type HudBox with
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: local across, down = dot:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A straight line on the HUD, such as a line between two stars of a
@@ -1403,6 +1437,13 @@ declare extern type HudLine with
     --- HudText's `pointerAt`.
     --- Example: local across, down = line:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- One of the game's pictures on the HUD: what `game.hud.image` gives.
@@ -1496,6 +1537,13 @@ declare extern type HudImage with
     --- `pointerAt`.
     --- Example: local across, down = compass:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A graph of how long the last pictures took to draw, against lines at 60
@@ -1545,6 +1593,13 @@ declare extern type HudGraph with
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: local across, down = graph:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A kind of fluid: what `game.fluid` gives. Every setting can be read and

@@ -593,6 +593,7 @@ impl ScriptHost {
         }
         if !stopped {
             self.run_timers();
+            self.run_animations();
         }
         self.hurts_due();
         self.switches_due();
@@ -2462,6 +2463,24 @@ impl ScriptHost {
             }
         }
         shared.timers.borrow_mut().retain(|timer| !timer.finished);
+    }
+
+    /// Moves the HUD animations on one tick, then calls the `onDone`
+    /// functions of those that finished, oldest first.
+    fn run_animations(&mut self) {
+        if self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        shared.hud.step_animations(self.clock.rate());
+        // The HUD is not borrowed here, so the function may start more
+        // animations or remove pieces.
+        while let Some(function) = shared.hud.next_done() {
+            if !self.call(&shared, &function, ()) {
+                return;
+            }
+        }
     }
 
     /// Calls one of the script's functions and reports it if it fails.
