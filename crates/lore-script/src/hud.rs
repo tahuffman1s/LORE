@@ -37,18 +37,19 @@ pub(crate) const HUD_FUNCTIONS: &[&str] = &[
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
 pub(crate) const TEXT_FIELDS: &[&str] = &[
-    "text", "color", "visible", "right", "down", "width", "height", "hovered", "pressed",
+    "text", "color", "visible", "layer", "right", "down", "width", "height", "hovered", "pressed",
 ];
 pub(crate) const BAR_FIELDS: &[&str] = &[
-    "value", "color", "visible", "right", "down", "width", "height", "hovered", "pressed",
+    "value", "color", "visible", "layer", "right", "down", "width", "height", "hovered", "pressed",
 ];
 pub(crate) const BOX_FIELDS: &[&str] = &[
-    "color", "visible", "right", "down", "width", "height", "corner", "rotation", "hovered",
-    "pressed",
+    "color", "visible", "layer", "right", "down", "width", "height", "corner", "rotation",
+    "hovered", "pressed",
 ];
 pub(crate) const LINE_FIELDS: &[&str] = &[
     "color",
     "visible",
+    "layer",
     "right",
     "down",
     "toRight",
@@ -58,9 +59,11 @@ pub(crate) const LINE_FIELDS: &[&str] = &[
     "pressed",
 ];
 pub(crate) const IMAGE_FIELDS: &[&str] = &[
-    "color", "visible", "right", "down", "width", "height", "rotation", "hovered", "pressed",
+    "color", "visible", "layer", "right", "down", "width", "height", "rotation", "hovered",
+    "pressed",
 ];
-pub(crate) const GRAPH_FIELDS: &[&str] = &["visible", "right", "down", "hovered", "pressed"];
+pub(crate) const GRAPH_FIELDS: &[&str] =
+    &["visible", "layer", "right", "down", "hovered", "pressed"];
 #[cfg(test)]
 pub(crate) const PIECE_METHODS: &[&str] = &["remove", "pointerAt"];
 
@@ -189,6 +192,9 @@ pub struct HudPiece {
     pub color: Color,
     /// Whether it is drawn.
     pub visible: bool,
+    /// Which pieces it is drawn over: higher is on top, and pieces of the
+    /// same layer are drawn in the order they were made.
+    pub layer: i32,
 }
 
 /// Which kind of piece a script holds, and the function that makes it.
@@ -253,12 +259,12 @@ impl Kind {
 
     fn options(self) -> &'static [&'static str] {
         match self {
-            Self::Text => &["at", "right", "down", "size", "color"],
-            Self::Bar => &["at", "right", "down", "width", "height", "color"],
+            Self::Text => &["at", "right", "down", "size", "color", "layer"],
+            Self::Bar => &["at", "right", "down", "width", "height", "color", "layer"],
             Self::Box => &[
-                "at", "right", "down", "width", "height", "corner", "rotation", "color",
+                "at", "right", "down", "width", "height", "corner", "rotation", "color", "layer",
             ],
-            Self::Graph => &["at", "right", "down", "width", "height", "frames"],
+            Self::Graph => &["at", "right", "down", "width", "height", "frames", "layer"],
             Self::Line => &[
                 "at",
                 "right",
@@ -267,9 +273,10 @@ impl Kind {
                 "toDown",
                 "thickness",
                 "color",
+                "layer",
             ],
             Self::Image => &[
-                "at", "right", "down", "width", "height", "rotation", "color",
+                "at", "right", "down", "width", "height", "rotation", "color", "layer",
             ],
         }
     }
@@ -357,6 +364,11 @@ impl Entry {
 #[derive(Debug, Default)]
 pub(crate) struct HudState {
     pieces: RefCell<Vec<Entry>>,
+    /// Places in `pieces`, in the order the pieces are drawn: by layer,
+    /// then first made first. Rebuilt, in the memory it already has, only
+    /// when `order_stale`.
+    order: RefCell<Vec<usize>>,
+    order_stale: Cell<bool>,
     next: Cell<u64>,
     /// How many times a piece has been made or removed.
     layout: Cell<u32>,
@@ -373,11 +385,28 @@ impl HudState {
         self.layout.get()
     }
 
-    /// Calls `see` with every piece and its place in the list, first made
-    /// first.
+    /// Puts `order` right again if a piece was made, removed or moved to
+    /// another layer since it was last made.
+    fn sort(&self) {
+        if !self.order_stale.replace(false) {
+            return;
+        }
+        let pieces = self.pieces.borrow();
+        let mut order = self.order.borrow_mut();
+        order.clear();
+        order.extend(0..pieces.len());
+        // Places run in the order pieces were made, so the place breaks
+        // ties: no two keys are equal, and sorting allocates nothing.
+        order.sort_unstable_by_key(|&place| (pieces[place].piece.layer, place));
+    }
+
+    /// Calls `see` with every piece and its place in the list, bottom
+    /// layer first and, within a layer, first made first.
     pub(crate) fn each(&self, mut see: impl FnMut(usize, &HudPiece)) {
-        for (index, entry) in self.pieces.borrow().iter().enumerate() {
-            see(index, &entry.piece);
+        self.sort();
+        let pieces = self.pieces.borrow();
+        for (rank, &place) in self.order.borrow().iter().enumerate() {
+            see(rank, &pieces[place].piece);
         }
     }
 
@@ -387,14 +416,18 @@ impl HudState {
         if !self.changed.replace(false) {
             return;
         }
-        for (index, entry) in self.pieces.borrow_mut().iter_mut().enumerate() {
+        self.sort();
+        let mut pieces = self.pieces.borrow_mut();
+        for (rank, &place) in self.order.borrow().iter().enumerate() {
+            let entry = &mut pieces[place];
             if std::mem::take(&mut entry.changed) {
-                see(index, &entry.piece);
+                see(rank, &entry.piece);
             }
         }
     }
 
     fn bump_layout(&self) {
+        self.order_stale.set(true);
         self.layout.set(self.layout.get().wrapping_add(1));
     }
 
@@ -621,6 +654,7 @@ impl UserData for PieceRef {
                         }
                         ("color", _) => lua.create_string(&entry.color).map(Value::String),
                         ("visible", _) => Ok(Value::Boolean(entry.piece.visible)),
+                        ("layer", _) => Ok(Value::Number(f64::from(entry.piece.layer))),
                         ("right", _) => Ok(Value::Number(f64::from(entry.piece.offset[0]))),
                         ("down", _) => Ok(Value::Number(f64::from(entry.piece.offset[1]))),
                         ("hovered", _) => Ok(Value::Boolean(
@@ -645,6 +679,23 @@ impl UserData for PieceRef {
                 let shared = hud_of(lua)?;
                 let set = match key.as_str() {
                     "text" if kind == Kind::Text => {
+                        // The menu kit sets the words every frame: the same
+                        // words are found out before anything is made.
+                        if let Value::String(written) = &value {
+                            let same = shared.hud.with(id, |entry| {
+                                let same = matches!(
+                                    &entry.piece.shape,
+                                    HudShape::Text { text, .. }
+                                        if text.as_bytes() == &*written.as_bytes()
+                                );
+                                (same, false)
+                            });
+                            match same {
+                                Some(true) => return Ok(()),
+                                None => return Err(removed(lua, kind)),
+                                Some(false) => {}
+                            }
+                        }
                         let what = format!("{}'s `text`", capitalised(kind.name()));
                         let new = text_of(lua, &what, &value, "ammo.text = \"29 / 90\"")?;
                         shared.hud.with(id, |entry| match &mut entry.piece.shape {
@@ -695,6 +746,19 @@ impl UserData for PieceRef {
                         ));
                     }
                     "color" if kind != Kind::Graph => {
+                        // The same colour as written before: nothing to parse.
+                        if let Value::String(text) = &value {
+                            let same = shared.hud.with(id, |entry| {
+                                let same = !entry.color.is_empty()
+                                    && entry.color.as_bytes() == &*text.as_bytes();
+                                (same, false)
+                            });
+                            match same {
+                                Some(true) => return Ok(()),
+                                None => return Err(removed(lua, kind)),
+                                Some(false) => {}
+                            }
+                        }
                         let (new, written) = color_of(
                             lua,
                             &format!("{}'s `color`", capitalised(kind.name())),
@@ -727,6 +791,23 @@ impl UserData for PieceRef {
                             entry.settle(&shared);
                             ((), changed)
                         })
+                    }
+                    "layer" => {
+                        let new = layer_of(lua, kind, &value, "ammo.layer = 10")?;
+                        let moved = shared
+                            .hud
+                            .with(id, |entry| {
+                                let changed = entry.piece.layer != new;
+                                entry.piece.layer = new;
+                                (changed, false)
+                            })
+                            .ok_or_else(|| removed(lua, kind))?;
+                        if moved {
+                            // The order the pieces are drawn in changed, so
+                            // whoever draws them reads the list again.
+                            shared.hud.bump_layout();
+                        }
+                        Some(())
                     }
                     "right" | "down" => {
                         let new = distance(lua, kind, &key, &value)?;
@@ -924,7 +1005,7 @@ fn under_pointer(shared: &Shared, entry: &Entry) -> bool {
 
 /// Which piece the pointer holds down as of this tick, kept for
 /// `piece.pressed`. A press begins on the tick `click` is first pressed with
-/// the pointer over a piece (the last made of those, as it is drawn on top)
+/// the pointer over a piece (the one drawn on top)
 /// and lasts until `click` is let go, wherever the pointer goes. With no
 /// `click` action, nothing is ever pressed.
 pub(crate) fn update_pressed(shared: &Shared, click: Option<lore_input::ActionId>) {
@@ -936,14 +1017,18 @@ pub(crate) fn update_pressed(shared: &Shared, click: Option<lore_input::ActionId
     if !state.just_pressed {
         return;
     }
+    shared.hud.sort();
+    let pieces = shared.hud.pieces.borrow();
     let top = shared
         .hud
-        .pieces
+        .order
         .borrow()
         .iter()
         .rev()
+        .map(|&place| &pieces[place])
         .find(|entry| entry.ruled.visible && under_pointer(shared, entry))
         .map(|entry| entry.id);
+    drop(pieces);
     shared.hud.pressed.set(top);
 }
 
@@ -1054,6 +1139,35 @@ fn image_named(lua: &Lua, shared: &Shared, name: &str) -> mlua::Result<u32> {
         " To add one, put {name}.png in a folder called images inside the game's folder."
     );
     Err(fail(lua, message))
+}
+
+/// The most a layer can be, either way: far more than any game needs, and
+/// small enough to keep whole.
+const FARTHEST_LAYER: f64 = 1_000_000.0;
+
+/// A layer a script wrote: a whole number, with anything else rounded.
+fn layer_of(lua: &Lua, kind: Kind, value: &Value, example: &str) -> mlua::Result<i32> {
+    let number = match value {
+        // Any whole number a script can write is kept in range below.
+        #[allow(clippy::cast_precision_loss)]
+        Value::Integer(whole) => Some(*whole as f64),
+        Value::Number(number) if number.is_finite() => Some(*number),
+        _ => None,
+    };
+    let Some(number) = number else {
+        return Err(fail(
+            lua,
+            format!(
+                "{}'s `layer` needs a number, but it was given {}. Higher layers are drawn \
+                 on top of lower ones. Write it like this: {example}",
+                capitalised(kind.name()),
+                describe(value)
+            ),
+        ));
+    };
+    // Rounded and kept in range, so it fits.
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(number.round().clamp(-FARTHEST_LAYER, FARTHEST_LAYER) as i32)
 }
 
 /// A number for a piece's field `key`, finite.
@@ -1258,6 +1372,7 @@ struct Options {
     /// A line's other end and thickness.
     to: [f32; 2],
     thickness: f32,
+    layer: i32,
 }
 
 /// Reads the table of options for a new piece of `kind`.
@@ -1281,6 +1396,7 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
         rotation: 0.0,
         to: LINE_TO,
         thickness: LINE_THICKNESS,
+        layer: 0,
     };
     let options = match options {
         Value::Nil => return Ok(read),
@@ -1405,6 +1521,9 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
                 {
                     read.frames = wanted as u16;
                 }
+            }
+            "layer" => {
+                read.layer = layer_of(lua, kind, &value, "{ layer = 10 }")?;
             }
             "color" if kind != Kind::Graph => {
                 (read.color, read.color_text) =
@@ -1651,6 +1770,7 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
             offset: read.offset,
             color: read.color,
             visible: true,
+            layer: read.layer,
         };
         let Some(id) = shared.hud.add(piece, read.color_text) else {
             return Err(fail(
@@ -1707,5 +1827,79 @@ mod on_screen_tests {
         let up = view(0.0, 0.3);
         let [_, down] = on_screen(&up, [0.0, 2.0, -10.0], SCREEN).unwrap();
         assert!(down > 100.0, "{down}");
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+
+    fn piece(layer: i32) -> HudPiece {
+        HudPiece {
+            shape: HudShape::Box {
+                size: [1.0, 1.0],
+                corner: 0.0,
+                rotation: 0.0,
+            },
+            anchor: Anchor::TopLeft,
+            offset: [0.0; 2],
+            color: Color::WHITE,
+            visible: true,
+            layer,
+        }
+    }
+
+    fn drawn(state: &HudState) -> Vec<i32> {
+        let mut layers = Vec::new();
+        state.each(|_, piece| layers.push(piece.layer));
+        layers
+    }
+
+    #[test]
+    fn higher_layers_are_drawn_last_and_equal_layers_keep_made_order() {
+        let state = HudState::default();
+        for layer in [5, 0, 5, -1, 0] {
+            state.add(piece(layer), String::new()).unwrap();
+        }
+        assert_eq!(drawn(&state), [-1, 0, 0, 5, 5]);
+        // Equal layers: the earlier made is first.
+        let mut ids = Vec::new();
+        let pieces = state.pieces.borrow();
+        for &place in state.order.borrow().iter() {
+            ids.push(pieces[place].id);
+        }
+        assert_eq!(ids, [3, 1, 4, 0, 2]);
+    }
+
+    #[test]
+    fn the_order_follows_a_piece_made_removed_or_moved() {
+        let state = HudState::default();
+        let low = state.add(piece(0), String::new()).unwrap();
+        let high = state.add(piece(10), String::new()).unwrap();
+        assert_eq!(drawn(&state), [0, 10]);
+        state.add(piece(5), String::new()).unwrap();
+        assert_eq!(drawn(&state), [0, 5, 10]);
+        state.with(low, |entry| {
+            entry.piece.layer = 20;
+            ((), false)
+        });
+        state.bump_layout();
+        assert_eq!(drawn(&state), [5, 10, 20]);
+        state.remove(high);
+        assert_eq!(drawn(&state), [5, 20]);
+    }
+
+    #[test]
+    fn changes_are_reported_at_the_place_each_piece_is_drawn() {
+        let state = HudState::default();
+        let first = state.add(piece(9), String::new()).unwrap();
+        state.add(piece(0), String::new()).unwrap();
+        state.with(first, |entry| {
+            entry.piece.visible = false;
+            ((), true)
+        });
+        let mut seen = Vec::new();
+        state.take_changes(|rank, piece| seen.push((rank, piece.layer)));
+        assert_eq!(seen, [(1, 9)]);
     }
 }

@@ -982,6 +982,11 @@ declare extern type HudText with
     --- while hidden.
     --- Example: ammo.visible = game.player.weapon ~= nil
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: ammo.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up). Set them to move it; in
@@ -1042,6 +1047,11 @@ declare extern type HudBar with
     --- False hides it until it is set to true again.
     --- Example: health.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: health.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up). Set them to move it; in
@@ -1106,6 +1116,11 @@ declare extern type HudBox with
     --- False hides it until it is set to true again.
     --- Example: dot.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: dot.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up). Set them to move it; in
@@ -1156,6 +1171,11 @@ declare extern type HudLine with
     --- False hides it until it is set to true again.
     --- Example: line.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: line.layer = 10
+    layer: number
 
     --- Where it starts, right of and below where it is pinned, in pixels
     --- on a screen 1080 high (below 0 is left or up).
@@ -1206,6 +1226,11 @@ declare extern type HudImage with
     --- False hides it until it is set to true again.
     --- Example: compass.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: compass.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up).
@@ -1249,6 +1274,11 @@ declare extern type HudGraph with
     --- False hides it until it is set to true again.
     --- Example: graph.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: graph.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up).
@@ -1750,6 +1780,199 @@ export type Setting = {
 
     --- What a new player has, and what `game.settings.reset` puts back.
     default: number | boolean | string,
+}
+
+--- One row of a menu, made by `game.menu.button`, `toggle`, `slider`, `choice`
+--- or `info`. It holds its own value: read and set `value`, `label` and `text`
+--- and the screen follows. Setting `value` from a script does not call
+--- `onChange`: that is for the player's changes.
+--- Example: local volume = game.menu.slider("Volume", { value = 0.8, format = game.menu.percent })
+export type MenuRow = {
+    --- The row's name, on the left. Set it to change the words on screen.
+    --- Example: row.label = "Volume (muted)"
+    label: string,
+
+    --- What a toggle (true or false), slider (a number) or choice (one of its
+    --- words) is now. With `get` the row reads it from there, and with `set`
+    --- setting it writes through. A button or an info line has none.
+    --- Example: volume.value = 0.5
+    value: any,
+
+    --- The words beside a button or an info line (buttons and info lines
+    --- only): words, or a function that gives them, read again for every
+    --- picture.
+    --- Example: status.text = function() return "Ready" end
+    text: string | (() -> string),
+
+    --- Adds a function called, on a tick, when the player presses a button.
+    --- Gives the row back.
+    --- Example: quit:onPress(function() game.quit() end)
+    onPress: (self: MenuRow, handler: () -> ()) -> MenuRow,
+
+    --- Adds a function called, on a tick, when the player changes a toggle,
+    --- slider or choice, and given the new value: a number for a slider, true
+    --- or false for a toggle, the chosen word (a string) for a choice. Gives
+    --- the row back.
+    --- Example: volume:onChange(function(value) print(value) end)
+    onChange: (self: MenuRow, handler: (value: any) -> ()) -> MenuRow,
+
+    --- What shows in a text box while it is empty and not being typed into,
+    --- dimmed. Text boxes only.
+    --- Example: name.placeholder = "Your name"
+    placeholder: string,
+
+    --- The most characters a text box takes (counted as letters, not bytes);
+    --- nil for no limit. Text boxes only.
+    --- Example: name.maxLength = 12
+    maxLength: number?,
+
+    --- True while the player is typing into a text box. Read only: use
+    --- `startTyping` and `stopTyping`.
+    --- Example: if name.typing then print("typing") end
+    typing: boolean,
+
+    --- Adds a function called, on a tick, when the player finishes a text
+    --- box with Enter, given the text. Escape puts the old text back and does
+    --- not call it. Gives the row back.
+    --- Example: name:onFinish(function(text) print("Hello, " .. text) end)
+    onFinish: (self: MenuRow, handler: (text: string) -> ()) -> MenuRow,
+
+    --- Adds a function called, on a tick, when the player cancels a text box
+    --- (Escape, or B on a gamepad); the old text is already back. Leaving the
+    --- menu does not call it. Gives the row back.
+    --- Example: name:onCancel(function() print("Never mind") end)
+    onCancel: (self: MenuRow, handler: () -> ()) -> MenuRow,
+
+    --- Adds a function called, on a tick, whenever typing into a text box
+    --- starts (true) or stops (false), for any reason: a press, Enter,
+    --- Escape, leaving the menu, the window losing focus. Gives the row back.
+    --- Example: name:onTyping(function(isTyping) hint.visible = isTyping end)
+    onTyping: (self: MenuRow, handler: (isTyping: boolean) -> ()) -> MenuRow,
+
+    --- Starts typing into a text box, as pressing it does (a gamepad gets
+    --- the on-screen keyboard). Its menu must be open and in front. While
+    --- typing, the keyboard's keys press no actions, menu actions too (arrows,
+    --- Enter and the rest are for the text); the mouse and gamepad still work.
+    --- Example: name:startTyping()
+    startTyping: (self: MenuRow) -> (),
+
+    --- Stops typing into a text box and keeps the text; `onFinish` is not
+    --- called (that is the player pressing Enter).
+    --- Example: name:stopTyping()
+    stopTyping: (self: MenuRow) -> (),
+}
+
+--- A menu on the HUD: a title and its rows, made by `game.menu.new`. It hears
+--- the player and draws itself while it is open; nothing needs calling every
+--- tick.
+--- Example: local sound = game.menu.new("Sound", { game.menu.toggle("Music", { value = true }) })
+export type Menu = {
+    --- The words at the top (or on its tab). Set it to change them.
+    --- Example: sound.title = "Sound and music"
+    title: string,
+
+    --- True while it is open, with it in front if it is in tabs. Read only.
+    --- Example: if sound.isOpen then print("Listening") end
+    isOpen: boolean,
+
+    --- Which row is chosen, counting from 1. Set it to start on another row.
+    --- Example: sound.chosen = 2
+    chosen: number,
+
+    --- What the line of keys at the bottom calls going back: "close" for a
+    --- screen on its own, "back" over another. Set it for a word of your own.
+    --- Example: sound.backWord = "resume"
+    backWord: string?,
+
+    --- Opens it (with its tabs, if it is in some) on top of any other open
+    --- screen. The player's own controls wait while a menu is open.
+    --- Example: sound:open()
+    open: (self: Menu) -> (),
+
+    --- Closes it, and shows the screen below, or gives the player their
+    --- controls back.
+    --- Example: sound:close()
+    close: (self: Menu) -> (),
+
+    --- Opens it, or closes it if it is open in front: for the key that opens it.
+    --- Example: if game.input.justPressed("sound_menu") then sound:toggle() end
+    toggle: (self: Menu) -> (),
+
+    --- Takes it away for good, closing it first. Make a new one to have it back.
+    --- Example: sound:remove()
+    remove: (self: Menu) -> (),
+}
+
+--- Menus shown as tabs of one screen, made by `game.menu.tabs`.
+--- Example: local options = game.menu.tabs({ sound, video })
+export type MenuTabs = {
+    --- True while the tabs are open. Read only.
+    --- Example: if options.isOpen then hud.visible = false end
+    isOpen: boolean,
+
+    --- The menu in front. Read only.
+    --- Example: print(options.current.title)
+    current: Menu,
+
+    --- Opens the tabs with `shown` in front (the one in front now if left out).
+    --- Example: options:open(video)
+    open: (self: MenuTabs, shown: Menu?) -> (),
+
+    --- Closes the tabs.
+    --- Example: options:close()
+    close: (self: MenuTabs) -> (),
+
+    --- Opens the tabs, or closes them if they are open with `shown` in front.
+    --- Example: if game.input.justPressed("options") then options:toggle(sound) end
+    toggle: (self: MenuTabs, shown: Menu?) -> (),
+
+    --- Takes the tabs and all their menus away for good.
+    --- Example: options:remove()
+    remove: (self: MenuTabs) -> (),
+}
+
+--- How every menu looks: colours (names or hex codes, as the HUD takes them)
+--- and the HUD layer. They apply to menus made afterwards, so set them
+--- before making menus; the pause menu is made on its first opening.
+--- Example: game.menu.style.back = "#101830e0"
+export type MenuStyle = {
+    --- Behind the whole menu.
+    --- Example: game.menu.style.back = "#101830e0"
+    back: string,
+    --- Behind the chosen row and the tab in front.
+    --- Example: game.menu.style.chosen = "#ffffff2e"
+    chosen: string,
+    --- The words.
+    --- Example: game.menu.style.words = "white"
+    words: string,
+    --- The chosen row's words.
+    --- Example: game.menu.style.chosenWords = "#ffd25a"
+    chosenWords: string,
+    --- Tabs not shown, the line of keys, and rows that only tell.
+    --- Example: game.menu.style.quiet = "#ffffff99"
+    quiet: string,
+    --- A toggle that is on.
+    --- Example: game.menu.style.on = "#7ee08a"
+    on: string,
+    --- A toggle that is off.
+    --- Example: game.menu.style.off = "#ffffff80"
+    off: string,
+    --- A slider's bar, unless the row says its own `color`.
+    --- Example: game.menu.style.bar = "#6fa8ff"
+    bar: string,
+    --- A slider's knob.
+    --- Example: game.menu.style.knob = "white"
+    knob: string,
+    --- A line along the top and a mark by the chosen row; nil (off) unless set.
+    --- Example: game.menu.style.accent = "#ffd27a"
+    accent: string?,
+    --- A shadow behind each menu; nil (off) unless set.
+    --- Example: game.menu.style.shadow = "#00000066"
+    shadow: string?,
+    --- The HUD layer menus are drawn on: higher is over the game's own pieces
+    --- (layer 0 unless you say another). 100 unless set.
+    --- Example: game.menu.style.layer = 200
+    layer: number,
 }
 
 declare game: {
@@ -3292,7 +3515,9 @@ declare game: {
     --- the actions above all read as let go, and the menu's own are heard
     --- instead: "menu_move", "menu_confirm", "menu_click", "menu_back"
     --- (Escape, or B), "menu_previous_tab", "menu_next_tab" and
-    --- "menu_close" (P, or Start).
+    --- "menu_close" (P, or Start), "menu_erase" (Backspace, or X: takes a
+    --- letter off in the on-screen keyboard) and "menu_space" (Tab, or Y:
+    --- types a space there).
     input: {
         --- True while the action is held down, or its stick is off centre.
         --- Example: if game.input.pressed("sprint") then speed = 8 end
@@ -3441,6 +3666,42 @@ declare game: {
         --- Example: game.onDraw(function() hint.text = "Press " .. game.input.label("interact") end)
         label: (action: string) -> string,
 
+        --- The characters the player typed since the last tick, as they are
+        --- (no Backspace, Enter or Escape: `typedKeys` has those). It is
+        --- empty unless `startTyping` was called. A `game.menu.textBox` reads
+        --- it for you; use this for a text field of your own.
+        --- Example: local typed = game.input.typed()
+        typed: () -> string,
+
+        --- The editing keys pressed since the last tick, in order: "Backspace",
+        --- "Enter" and "Escape". The array is empty unless `startTyping` was
+        --- called. Characters come from `typed`.
+        --- Example: for _, key in game.input.typedKeys() do if key == "Enter" then print("done") end end
+        typedKeys: () -> { string },
+
+        --- Turns the keyboard into a text input: keys no longer press
+        --- actions (held keys are let go), the mouse and gamepad still do,
+        --- and `typed` hears the text. Call `stopTyping` when done.
+        --- Example: game.input.startTyping()
+        startTyping: () -> (),
+
+        --- Gives the keyboard back to the actions. It does not call a text
+        --- box's `onFinish`. The engine also does this when the window loses
+        --- focus, a new level loads or the script fails.
+        --- Example: game.input.stopTyping()
+        stopTyping: () -> (),
+
+        --- Whether the keyboard is a text input now. It stays false while the
+        --- engine's on-screen keyboard is open, as that is not the keyboard.
+        --- Example: if game.input.isTyping() then return end
+        isTyping: () -> boolean,
+
+        --- Whether the player last used a gamepad (not the keyboard and
+        --- mouse), as of this tick. It is safe to read in a tick or while
+        --- drawing, to show the right hint.
+        --- Example: hint.text = if game.input.usingGamepad() then "Press A" else "Press E"
+        usingGamepad: () -> boolean,
+
         --- Calls `handler` when the player's controls file is saved and read again, and once at start if it is wrong.
         --- `change.message` is the sentence the engine's notice shows, `change.changes` lists
         --- each action that changed (`action`, `before`, `after`; empty when none did),
@@ -3516,6 +3777,142 @@ declare game: {
         --- Example: game.settings.reset()
         --- Example: game.settings.reset("field_of_view")
         reset: (() -> ()) & ((name: string) -> ()),
+    },
+
+    --- Menus: rows, menus and tabs that keys, a gamepad and the mouse all
+    --- work, drawn on the HUD. Make them once, at the top of the script, then
+    --- `open` them. One stack of open screens: the top one hears the player,
+    --- closing it shows the one below, and the pause menu is on it too.
+    --- Example: local sound = game.menu.new("Sound", { game.menu.toggle("Music", { value = true }) })
+    menu: {
+        --- A row that does something when pressed. Options: `onPress` and
+        --- `text`.
+        --- Example: game.menu.button("Lightning", { onPress = function() game.weather.strike(game.player.position) end })
+        button: (label: string, options: { onPress: (() -> ())?, text: (string | (() -> string))? }?) -> MenuRow,
+
+        --- An on or off row. Options: `value` (false), `onChange`, and `get`
+        --- and `set` for a value that lives elsewhere.
+        --- Example: game.menu.toggle("Subtitles", { value = true, onChange = function(on) print(on) end })
+        toggle: (label: string, options: { value: boolean?, onChange: ((boolean) -> ())?, get: (() -> boolean)?, set: ((boolean) -> ())? }?) -> MenuRow,
+
+        --- A number row with a bar to drag. Options: `min` (0), `max` (1),
+        --- `step` (a twentieth), `value` (min), `wraps` (false), `format`
+        --- (turns the number into words), `color`, `onChange`, `get`, `set`.
+        --- Example: game.menu.slider("Fog", { value = 0.2, format = game.menu.percent })
+        slider: (label: string, options: { min: number?, max: number?, step: number?, value: number?, wraps: boolean?, format: ((number) -> string)?, color: string?, onChange: ((number) -> ())?, get: (() -> number)?, set: ((number) -> ())? }?) -> MenuRow,
+
+        --- A row of a few words, gone through with left and right. `options`
+        --- is required. Others: `value` (the first), `wraps` (true), `format`,
+        --- `onChange`, `get`, `set`.
+        --- Example: game.menu.choice("Size", { options = { "small", "large" } })
+        choice: (label: string, options: { options: { string }, value: string?, wraps: boolean?, format: ((string) -> string)?, onChange: ((string) -> ())?, get: (() -> string)?, set: ((string) -> ())? }) -> MenuRow,
+
+        --- A line that only tells and cannot be chosen. `text` is words or a
+        --- function that gives them.
+        --- Example: game.menu.info("Speed", { text = function() return string.format("%.1f m/s", vector.magnitude(game.player.velocity)) end })
+        info: (label: string, options: { text: (string | (() -> string))? }?) -> MenuRow,
+
+        --- Words the player types on the keyboard. Press the row (Enter or a
+        --- click), type, Enter finishes (`onFinish`), Escape puts back the
+        --- old text. `value` is the text ("" if left out), `placeholder` is
+        --- dimmed while it is empty, `maxLength` the most characters.
+        --- `onChange` hears each change. A gamepad opens an on-screen
+        --- keyboard instead, made by the menu kit with nothing to write: a
+        --- grid of keys walked with the d-pad or stick, A types the key,
+        --- X erases, Y types a space, a bumper or the Shift key turns
+        --- capitals on and off, Start is Done (`onFinish`; Start also
+        --- finishes a box typed into from the keyboard) and B puts the
+        --- old text back (`onCancel`). A value longer than `maxLength` is
+        --- cut to fit. The pointer can click its keys. Letters typed
+        --- on a real keyboard in the meantime go in too, if the game asked
+        --- for them with `game.input.startTyping`.
+        --- Example: game.menu.textBox("Name", { placeholder = "Your name", maxLength = 20, onFinish = function(text) print(text) end })
+        textBox: (label: string, options: { value: string?, placeholder: string?, maxLength: number?, onChange: ((string) -> ())?, onFinish: ((string) -> ())?, onCancel: (() -> ())?, onTyping: ((isTyping: boolean) -> ())? }?) -> MenuRow,
+
+        --- A share from 0 to 1 as a percentage, for a slider's `format`:
+        --- 0.25 is "25%".
+        --- Example: game.menu.slider("Rain", { format = game.menu.percent })
+        percent: (share: number) -> string,
+
+        --- Makes a menu from a title and rows, hidden until opened. Each row
+        --- belongs to one menu. `place` can say `right`, `down` (40 and 40,
+        --- pixels on a screen 1080 high) and `width` (820).
+        --- Example: local sound = game.menu.new("Sound", { music, volume }, { right = 40, down = 40, width = 640 })
+        new: (title: string, rows: { MenuRow }, place: { right: number?, down: number?, width: number? }?) -> Menu,
+
+        --- Whether a gamepad pressing a text box gets the engine's on-screen
+        --- keyboard (true). Set it false to show your own: the press still
+        --- starts typing (`row.typing`, `onTyping`), the kit draws no
+        --- keyboard, Start finishes and B cancels, and your keyboard sets
+        --- `row.value`.
+        --- Example: game.menu.onScreenKeyboard = false
+        onScreenKeyboard: boolean,
+
+        --- Shows menus as tabs of one screen, the first in front.
+        --- Example: local options = game.menu.tabs({ sound, video })
+        tabs: (menus: { Menu }) -> MenuTabs,
+
+        --- The open screen on top (the menu, or the tabs, as made), or nil.
+        --- Example: if game.menu.top() == sound then print("Sound is showing") end
+        top: () -> (Menu | MenuTabs)?,
+
+        --- True while any screen is open, the pause menu's too.
+        --- Example: crosshair.visible = not game.menu.anyOpen()
+        anyOpen: () -> boolean,
+
+        --- How menus look. It applies to menus made afterwards (the pause
+        --- menu is made on its first opening), so set it before making menus.
+        --- Example: game.menu.style.accent = "#ffd27a"
+        style: MenuStyle,
+
+        --- The sounds menus make, as names of sounds (nil for none) and a volume.
+        --- Example: game.menu.sounds.move = nil
+        sounds: {
+            --- Played as the chosen row moves: "menu-move", or nil for none.
+            --- Example: game.menu.sounds.move = nil
+            move: string?,
+            --- Played when a row is pressed: "menu-choose", or nil for none.
+            --- Example: game.menu.sounds.choose = "ui/confirm"
+            choose: string?,
+            --- How loud, 0 to 1 (0.6).
+            --- Example: game.menu.sounds.volume = 0.3
+            volume: number,
+        },
+    },
+
+    --- The pause menu, the engine's own, on with nothing written: the
+    --- `pause` action (Escape, Start) stops the game and shows Resume,
+    --- Settings and Quit.
+    --- Example: game.pauseMenu.title = "Game paused"
+    pauseMenu: {
+        --- False turns the pause menu off (true). A game that makes its own
+        --- should say so at the top of the script. While it is false,
+        --- `open()` is a mistake. Only `enabled` and `title` can be set.
+        --- Example: game.pauseMenu.enabled = false
+        enabled: boolean,
+
+        --- The words at the top of the first screen ("Paused").
+        --- Example: game.pauseMenu.title = "Game paused"
+        title: string,
+
+        --- Opens it at the first screen and pauses the game. Written
+        --- `game.pauseMenu.open()` or `game.pauseMenu:open()`.
+        --- Example: game.pauseMenu.open()
+        open: (self: any?) -> (),
+
+        --- Closes it and lets the game go on. Written `game.pauseMenu.close()`
+        --- or `game.pauseMenu:close()`.
+        --- Example: game.pauseMenu.close()
+        close: (self: any?) -> (),
+
+        --- True while it is open. Read only: use `open()` and `close()`.
+        --- Example: if game.pauseMenu.isOpen then crosshair.visible = false end
+        isOpen: boolean,
+
+        --- Adds a row of the game's own to the first screen, above Quit. Add
+        --- rows at the top of the script, before it first opens.
+        --- Example: game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = photo }))
+        addRow: (row: MenuRow) -> (),
     },
 
     --- How fast this computer is drawing pictures. It is different on every

@@ -19,16 +19,15 @@
 --        and right, and the right bumper.
 --
 -- A gamepad has only two buttons LORE leaves free for a game, Select and
--- the left bumper, so the three menus are tabs of one panel. Select opens
+-- the left bumper, so the three menus are tabs of one screen. Select opens
 -- it at the weather; while it is open the bumpers go from tab to tab and
 -- B closes it. The frame meter is a row of the debug menu. The left
 -- bumper clears the fluids while no menu is open. Y changes the fluid and
 -- the right trigger shoots it. F1 or F7 with the other menu open goes
 -- across to its own.
 --
--- Each part is a file beside this one: menu.luau makes menus (copy it into
--- your own game), and the others use it. pause_menu.luau is the pause menu
--- every new game starts with, as `lore new` writes it.
+-- Each part is a file beside this one. The menus are made with game.menu and
+-- the pause menu is the engine's own, game.pauseMenu: nothing to copy.
 
 game.input.bind("weather_menu", { "F1", "GamepadSelect" })
 game.input.bind("debug_menu", { "F7", "LeftStickPress" })
@@ -37,7 +36,6 @@ game.input.bind("frame_meter", { "F12", "RightStickPress" })
 -- game.input.bind("clear_fluids", { "F8", "LeftBumper" })
 game.input.bind("hide_hud", { "F2", "LeftBumper" })
 
-local menu = require("./menu")
 local weatherMenu = require("./weather_menu")
 local debugMenu = require("./debug_menu")
 local meter = require("./frame_meter")
@@ -49,11 +47,11 @@ local warning = require("./testing_warning")
 local weapons = require("./weapons")
 require("./lamps")
 
--- The menus are tabs of one panel, so one gamepad button reaches them all.
-local panel = menu.panel({ weatherMenu, debugMenu.menu })
+-- The menus are tabs of one screen, so one gamepad button reaches them all.
+local tabs = game.menu.tabs({ weatherMenu, debugMenu.menu })
 
--- The pause menu, made last so that it is drawn over everything else.
-local pauseMenu = require("./pause_menu")
+-- The pause menu is the engine's own: game.pauseMenu.
+local pauseMenu = game.pauseMenu
 
 local drawHud = true
 
@@ -67,34 +65,32 @@ end)
 
 game.onTick(function(step)
     -- While the game is paused, the keys are the pause menu's.
-    if pauseMenu.isOpen() then
+    if pauseMenu.isOpen then
         return
     end
     if game.input.justPressed("weather_menu") then
-        panel:toggle(weatherMenu)
+        tabs:toggle(weatherMenu)
     elseif game.input.justPressed("debug_menu") then
-        panel:toggle(debugMenu.menu)
+        tabs:toggle(debugMenu.menu)
     -- elseif game.input.justPressed("fluid_menu") then
-    --    panel:toggle(fluidMenu)
-    elseif game.input.justPressed("hide_hud") and not panel.isOpen then
+    --    tabs:toggle(fluidMenu)
+    elseif game.input.justPressed("hide_hud") and not tabs.isOpen then
         -- In a menu the left bumper goes back a tab, so it hides nothing.
         drawHud = not drawHud
     elseif game.input.justPressed("frame_meter") then
         meter.cycle()
-    -- elseif game.input.justPressed("clear_fluids") and not panel.isOpen then
+    -- elseif game.input.justPressed("clear_fluids") and not tabs.isOpen then
         -- In a menu the left bumper goes back a tab, so it clears nothing.
        --  fluids.clear()
     end
-    panel:update()
-    -- if not panel.isOpen then
+    -- if not tabs.isOpen then
         -- gun.update()
     -- end
     -- fluids.update(step)
 end)
 
 game.onDraw(function()
-    local playing = not panel.isOpen and not pauseMenu.isOpen() -- no menu is open
-    panel:draw()
+    local playing = not tabs.isOpen and not pauseMenu.isOpen -- no menu is open
     meter.draw()
     debugMenu.draw(playing)
     debugMenu.drawShaders()

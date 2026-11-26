@@ -90,6 +90,12 @@ pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "wheel",
     "stepped",
     "label",
+    "typed",
+    "typedKeys",
+    "startTyping",
+    "stopTyping",
+    "isTyping",
+    "usingGamepad",
     "onControlsChanged",
     "showControlsNotice",
 ];
@@ -447,6 +453,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         })?,
     )?;
     tools_api::install_input(lua, shared, &input)?;
+    crate::typing_api::install(lua, shared, &input)?;
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
 
@@ -511,12 +518,16 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("hud");
     members.push("input");
     members.push("lamps");
+    for name in crate::builtin::GAME_TABLES {
+        members.push(name);
+    }
     members.push("lighting");
     members.push("look");
     members.push("settings");
     members.push("shaders");
     members.push("sky");
     members.push("weather");
+    crate::builtin::make_tables(lua, &game)?;
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
 
@@ -937,7 +948,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 50] = [
+        let groups: [(&str, &[&str]); 57] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -988,6 +999,13 @@ mod tests {
             ("Lamp:", &["remove"]),
             ("game.shaders.", crate::shader_api::SHADERS_FUNCTIONS),
             ("Shader:", crate::shader_api::SHADER_METHODS),
+            ("MenuRow.", crate::builtin::MENU_ROW_FIELDS),
+            ("Menu.", crate::builtin::MENU_FIELDS),
+            ("MenuTabs.", crate::builtin::MENU_TABS_FIELDS),
+            ("MenuStyle.", crate::builtin::MENU_STYLE_FIELDS),
+            ("game.menu.", crate::builtin::MENU_FUNCTIONS),
+            ("game.menu.sounds.", &["choose", "move", "volume"]),
+            ("game.pauseMenu.", crate::builtin::PAUSE_MENU_FIELDS),
         ];
         let mut real: Vec<String> = groups
             .iter()

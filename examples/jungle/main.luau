@@ -7,7 +7,7 @@
 --
 -- "interact" (E, or Y on a gamepad) opens a panel to try the weather with.
 -- "pause" (Escape, or Start) opens the pause menu, with the settings and
--- the way out: it is pause_menu.luau, required on the last line.
+-- the way out: it is the engine's own (game.pauseMenu), nothing to require.
 
 -- Where the water is: places along the creek, and the lake. build.py writes
 -- them down when it lays the water out.
@@ -530,5 +530,3 @@ end)
 
 show()
 
--- The pause menu: last, so it is drawn over the weather panel's pieces.
-require("./pause_menu")

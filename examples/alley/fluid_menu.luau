@@ -3,7 +3,7 @@
 -- as game.fluid("honey").viscosity = 0.7, and every drop of that fluid in
 -- the world changes as the row does: spray some, then drag "Thick".
 
-local menu = require("./menu")
+local menu = game.menu
 local fluids = require("./fluids")
 local gun = require("./fluid_gun")
 
@@ -225,7 +225,7 @@ local rows = {
         end,
     }),
     menu.button("As it was", {
-        press = function()
+        onPress = function()
             fluids.reset(gun.fluid())
         end,
         text = function()
@@ -233,7 +233,7 @@ local rows = {
         end,
     }),
     menu.button("Clear this fluid", {
-        press = function()
+        onPress = function()
             game.fluids.clear(kind())
         end,
         text = function()

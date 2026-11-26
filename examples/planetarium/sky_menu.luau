@@ -3,7 +3,7 @@
 -- Every row is one or two calls to game.sky, through clock.luau and
 -- view.luau.
 
-local menu = require("./menu")
+local menu = game.menu
 local clock = require("./clock")
 local view = require("./view")
 local skyArt = require("./sky_art")
@@ -20,7 +20,7 @@ end
 local function eventRows(list: { events.Event }): { any }
     local rows = {}
     for _, event in list do
-        table.insert(rows, menu.button(event.name, { press = function() jumpTo(event) end }))
+        table.insert(rows, menu.button(event.name, { onPress = function() jumpTo(event) end }))
     end
     return rows
 end
@@ -100,21 +100,21 @@ local timeMenu = menu.new("Time", {
         format = function(year) return tostring(math.floor(year + 0.5)) end,
     }),
     menu.button("Next sunrise", {
-        press = function()
+        onPress = function()
             if not clock.nextSunCrossing(true) then
                 print("The sun does not rise here in the next two days.")
             end
         end,
     }),
     menu.button("Next sunset", {
-        press = function()
+        onPress = function()
             if not clock.nextSunCrossing(false) then
                 print("The sun does not set here in the next two days.")
             end
         end,
     }),
-    menu.button("Back an hour", { press = function() clock.move(-1 / 24) end }),
-    menu.button("Back a day", { press = function() clock.move(-1) end }),
+    menu.button("Back an hour", { onPress = function() clock.move(-1 / 24) end }),
+    menu.button("Back a day", { onPress = function() clock.move(-1) end }),
 })
 
 -- Places to stand, as a name, a latitude and a longitude.
@@ -280,13 +280,13 @@ local planetRows = {}
 for _, name in { "Sun", "Moon", table.unpack(view.planets) } do
     table.insert(planetRows, menu.button(name, {
         text = function() return whereIs(name) end,
-        press = function()
+        onPress = function()
             local direction = view.find(name)
             if direction then
                 view.lookAlong(direction)
                 view.setZoom(if name == "Sun" or name == "Moon" then 0.6 else 0.8)
             end
-            skyMenu.panel:close()
+            skyMenu.tabs:close()
         end,
     }))
 end
@@ -296,6 +296,6 @@ local eclipseMenu = menu.new("Eclipses", eventRows(events.eclipses))
 local nightMenu = menu.new("Night sky", eventRows(events.night))
 
 skyMenu.events = eclipseMenu
-skyMenu.panel = menu.panel({ eclipseMenu, nightMenu, planetsMenu, timeMenu, placeMenu, skyTab })
+skyMenu.tabs = menu.tabs({ eclipseMenu, nightMenu, planetsMenu, timeMenu, placeMenu, skyTab })
 
 return skyMenu

@@ -588,6 +588,10 @@ impl Game for ScriptGame {
         self.host.tick(input, step);
     }
 
+    fn typing_ended(&mut self) {
+        self.host.typing_ended();
+    }
+
     fn frame(&mut self, frame: &mut Frame) {
         // What the script reads while it draws: how long pictures take, who
         // is playing and with which controls, so a label and a graph are
@@ -676,6 +680,9 @@ impl Game for ScriptGame {
         }
         if let Some(set) = self.host.take_action_set() {
             frame.use_action_set(set);
+        }
+        if let Some(on) = self.host.take_typing() {
+            frame.set_typing(on);
         }
         if self.host.take_quit() {
             frame.close();

@@ -65,7 +65,7 @@ its words every frame against `game.hud.size()`, so it fits any window:
 long names shorten with an ellipsis, the caption wraps, the compass takes
 the room left between the corner panels, and key prompts give way, least
 needed first, on a narrow screen. The menus, the pause
-menu's too, take the same look through `menu.style` in `menu.luau`, set at
+menu's too, take the same look through `game.menu.style`, set at
 the top of `main.luau`.
 
 ## Constellations and planets

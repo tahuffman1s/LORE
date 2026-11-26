@@ -202,7 +202,7 @@ local card = game.hud.box({ width = 300, height = 80, corner = 12, rotation = 5 
 card.width, card.height, card.corner, card.rotation = 320, 90, 14, 0
 local line: HudLine = game.hud.line({ at = "center", right = -40, toRight = 40, toDown = 10, thickness = 2, color = "white" })
 line.toRight, line.toDown, line.thickness = 60, 0, 3
-local picture: HudImage = game.hud.image("compass", { at = "top", width = 120, rotation = 15, color = "#ffffffc0" })
+local picture: HudImage = game.hud.image("compass", { at = "top", width = 120, rotation = 15, color = "#ffffffc0", layer = 3 })
 picture.width, picture.height, picture.rotation = 140, 140, 30
 game.hud.box()
 
@@ -213,6 +213,8 @@ game.onDraw(function()
     local words: string = ammo.text .. ammo.color
     ammo.visible = not ammo.visible
     dot.visible = health.visible
+    dot.layer = ammo.layer + 1
+    health.layer, picture.layer = 5, 6
     dot.color = "green"
     dot.right = shown.value
     dot.down = dot.right + health.down - ammo.right
@@ -354,6 +356,19 @@ game.onTick(function()
         print(px + py)
     end
     scroll += game.input.wheel()
+    local typed: string = game.input.typed()
+    for _, key in game.input.typedKeys() do
+        if key == "Enter" then
+            game.input.stopTyping()
+        end
+    end
+    local typingNow: boolean = game.input.isTyping()
+    local onPad: boolean = game.input.usingGamepad()
+    if typed == "" and typingNow and onPad then
+        game.input.stopTyping()
+    elseif typed == "x" then
+        game.input.startTyping()
+    end
     local sx, sy = game.input.stepped("menu_move")
     if sy ~= 0 then
         selected = (selected - sy - 1) % 4 + 1
@@ -778,6 +793,73 @@ game.onTick(function()
 end)
 game.weapon("carbine", { from = "rifle", hands = "two", support = vector.create(0, -0.03, -0.2), action = "bolt", ejects = true, ejectAt = vector.create(0.02, 0.05, -0.1) })
 
+-- Menus: rows that hold their value, menus, tabs, the stack and the pause menu.
+local musicRow: MenuRow = game.menu.toggle("Music", { value = true, onChange = function(on: boolean) print(on) end })
+local loudRow: MenuRow = game.menu.slider("Volume", {
+    min = 0, max = 1, step = 0.1, value = 0.8, wraps = false, color = "#6fa8ff",
+    format = game.menu.percent, onChange = function(v: number) print(v) end,
+})
+local lampOn: boolean = false
+local linkedRow: MenuRow = game.menu.toggle("Lamp", { get = function() return lampOn end, set = function(on: boolean) lampOn = on end })
+local sizeRow: MenuRow = game.menu.choice("Size", { options = { "small", "large" }, value = "large", wraps = true, format = string.upper })
+local fogRow: MenuRow = game.menu.slider("Fog", { get = function() return 0.5 end, set = function(v: number) print(v) end })
+local quietRow: MenuRow = game.menu.button("Quiet", { onPress = function() loudRow.value = 0 end, text = "now" })
+local nameRow: MenuRow = game.menu.textBox("Name", { value = "", placeholder = "Your name", maxLength = 20, onChange = function(text: string) print(text) end, onFinish = function(text: string) print(text) end, onCancel = function() print("no") end, onTyping = function(isTyping: boolean) print(isTyping) end })
+nameRow.placeholder = "Who?"
+nameRow.maxLength = 12
+nameRow:onFinish(function(text: string) print(text) end)
+nameRow:onCancel(function() print("cancelled") end)
+nameRow:onTyping(function(isTyping: boolean) print(isTyping) end)
+game.menu.onScreenKeyboard = false
+print(game.menu.onScreenKeyboard)
+nameRow:startTyping()
+nameRow:stopTyping()
+print(nameRow.typing, nameRow.placeholder, nameRow.maxLength)
+local speedRow: MenuRow = game.menu.info("Speed", { text = function() return "fast" end })
+quietRow:onPress(function() print("pressed") end):onChange(function(value: any) print(value) end)
+loudRow:onChange(function(value: any) print(value) end)
+loudRow.label = "Loudness"
+local rowShown: string = loudRow.label .. tostring(loudRow.value)
+speedRow.text = "slow"
+local rowWords: string | (() -> string) = speedRow.text
+local soundMenu: Menu = game.menu.new("Sound", { musicRow, loudRow, linkedRow, sizeRow, fogRow, quietRow, speedRow }, { right = 40, down = 40, width = 640 })
+local videoMenu: Menu = game.menu.new("Video", { game.menu.button("Go") })
+local tabsOf: MenuTabs = game.menu.tabs({ soundMenu, videoMenu })
+soundMenu.title = "Sound and music"
+soundMenu.chosen = 2
+soundMenu.backWord = "close"
+tabsOf:open(videoMenu)
+tabsOf:open()
+tabsOf:toggle(soundMenu)
+tabsOf:toggle()
+tabsOf:close()
+tabsOf:remove()
+local lonelyMenu: Menu = game.menu.new("Lonely", { game.menu.info("Hello", { text = "hi" }) })
+lonelyMenu:open()
+lonelyMenu:toggle()
+lonelyMenu:close()
+print(lonelyMenu.isOpen, lonelyMenu.title, lonelyMenu.chosen, lonelyMenu.backWord, tabsOf.isOpen, tabsOf.current.title)
+lonelyMenu:remove()
+local onTop: (Menu | MenuTabs)? = game.menu.top()
+local anyMenuOpen: boolean = game.menu.anyOpen()
+local styleOf: MenuStyle = game.menu.style
+styleOf.back, styleOf.chosen, styleOf.words, styleOf.chosenWords, styleOf.quiet = "black", "white", "white", "yellow", "gray"
+styleOf.on, styleOf.off, styleOf.bar, styleOf.knob = "green", "gray", "blue", "white"
+styleOf.accent, styleOf.shadow, styleOf.layer = "gold", nil, 150
+game.menu.sounds.move = nil
+game.menu.sounds.choose = "ui/confirm"
+game.menu.sounds.volume = 0.3
+print(onTop, anyMenuOpen, rowShown, rowWords)
+
+game.pauseMenu.enabled = true
+game.pauseMenu.title = "Game paused"
+game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = function() print("click") end }))
+game.pauseMenu.open()
+game.pauseMenu.close()
+game.pauseMenu:open()
+game.pauseMenu:close()
+local pausedByMenu: boolean = game.pauseMenu.isOpen
+print(game.pauseMenu.title, pausedByMenu)
 game.input.showControlsNotice(false)
 game.input.onControlsChanged(function(change)
     hint.text = change.message

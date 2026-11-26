@@ -135,7 +135,7 @@ Then open main.luau in an editor, change something and save: the running game up
     <pre class="out" tabindex="0"><code>[INFO] Jump number 1
 [INFO] Jump number 2</code></pre>
   </div>
-  <p>All of that text comes from your script. <kbd>Esc</kbd>, or Start on a gamepad, pauses the game, gives the mouse back and opens its menu: Resume, Settings and Quit. The menu is part of your game, in <span class="mono">pause_menu.luau</span> beside your script. Choose Resume, and leave the game running for the next step.</p>
+  <p>All of that text comes from your script. <kbd>Esc</kbd>, or Start on a gamepad, pauses the game, gives the mouse back and opens its menu: Resume, Settings and Quit. The menu comes with LORE, and your script can change it: <span class="mono">game.pauseMenu.title</span> names it and <span class="mono">game.pauseMenu.addRow</span> adds a row of your own. Choose Resume, and leave the game running for the next step.</p>
   <details>
     <summary>It says <code>Could not find Vulkan on this computer</code>, or that Vulkan is too old</summary>
     <p>LORE draws with Vulkan 1.3, which comes with the graphics driver. Update the driver for your graphics card and run <code>lore run</code> again. On Linux, also install the Vulkan loader: <code>sudo apt install libvulkan1</code> or <code>sudo dnf install vulkan-loader</code>.</p>

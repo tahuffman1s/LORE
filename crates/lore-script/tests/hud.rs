@@ -76,6 +76,7 @@ fn pieces_are_handed_over_as_written_in_the_order_they_were_made() {
             offset: [0.0, 0.0],
             color: Color::WHITE,
             visible: true,
+            layer: 0,
         }
     );
     assert_eq!(
@@ -89,6 +90,7 @@ fn pieces_are_handed_over_as_written_in_the_order_they_were_made() {
             offset: [-20.0, -10.0],
             color: Color::rgb(1.0, 136.0 / 255.0, 0.0),
             visible: true,
+            layer: 0,
         }
     );
     assert_eq!(
@@ -438,7 +440,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ),
         (
             "ammo.value = 1",
-            "A HUD text has nothing called `value`. It has: text, color, visible, right, down, width, height, hovered, pressed, ammo:pointerAt() says where the pointer is across it, and ammo:remove() takes it off the screen. Only a bar has a value",
+            "A HUD text has nothing called `value`. It has: text, color, visible, layer, right, down, width, height, hovered, pressed, ammo:pointerAt() says where the pointer is across it, and ammo:remove() takes it off the screen. Only a bar has a value",
         ),
         (
             "ammo.txt = 1",
@@ -471,7 +473,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ("ammo.color = \"bleu\"", "Did you mean \"blue\"?"),
         (
             "health.text = \"Health\"",
-            "A HUD bar has nothing called `text`. It has: value, color, visible, right, down, width, height, hovered, pressed, health:pointerAt() says where the pointer is across it, and health:remove() takes it off the screen. For words beside it, make a text",
+            "A HUD bar has nothing called `text`. It has: value, color, visible, layer, right, down, width, height, hovered, pressed, health:pointerAt() says where the pointer is across it, and health:remove() takes it off the screen. For words beside it, make a text",
         ),
         (
             "health.value = \"full\"",

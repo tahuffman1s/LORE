@@ -343,6 +343,8 @@ impl ActionMap {
             ("menu_previous_tab", ["Q", "LeftBumper"]),
             ("menu_next_tab", ["E", "RightBumper"]),
             ("menu_close", ["P", "GamepadStart"]),
+            ("menu_erase", ["Backspace", "GamepadWest"]),
+            ("menu_space", ["Tab", "GamepadNorth"]),
         ];
         let mut map = Self::new();
         // The names and bindings above are fixed and covered by a test, so none
@@ -1157,7 +1159,7 @@ mod tests {
     #[test]
     fn default_map_is_complete_on_both_devices() {
         let map = ActionMap::standard();
-        assert_eq!(map.len(), 27);
+        assert_eq!(map.len(), 29);
         // No scores are kept, so nothing shows them; Select (the Xbox View
         // button) switches the view.
         assert!(map.action("scoreboard").is_err());
@@ -1439,7 +1441,9 @@ mod tests {
                 "menu_back",
                 "menu_previous_tab",
                 "menu_next_tab",
-                "menu_close"
+                "menu_close",
+                "menu_erase",
+                "menu_space"
             ]
         );
     }

@@ -527,6 +527,9 @@ impl ScriptHost {
         } else {
             &blank
         };
+        // The device is part of the tick, so `usingGamepad` is right in the
+        // very tick that hears the press.
+        self.tools.set_device_kind(input.device);
         if let Some(version) = &self.running {
             version.shared.input.borrow_mut().clone_from(input);
             // Which piece is held down, from this tick's pointer and click.
@@ -1409,6 +1412,20 @@ impl ScriptHost {
         (self.live_set.asked.take()).then(|| self.live_set.live.get())
     }
 
+    /// Whether the script turned typing on (`Some(true)`) or off since this
+    /// was last called, for whoever owns the input to follow
+    /// ([`Input::set_typing`](lore_input::Input::set_typing)).
+    pub fn take_typing(&mut self) -> Option<bool> {
+        self.tools.typing.take()
+    }
+
+    /// Typing ended from outside (focus lost, a new level, the window
+    /// closing): scripts read `isTyping` as false from now on, and the
+    /// text box in the kit notices on its next tick.
+    pub fn typing_ended(&mut self) {
+        self.tools.typing.ended_by_engine();
+    }
+
     /// The action set the script's game is in: `gameplay` until the script
     /// chooses another. It is what `game.input.currentSet()` gives a script.
     #[must_use]
@@ -2117,6 +2134,8 @@ impl ScriptHost {
         if self.live_set.live.get() != before {
             self.live_set.asked.set(true);
         }
+        // A text box of the old version is gone: the keyboard is the player's.
+        self.tools.typing.reset();
         if had_version {
             log::info!("{}", reloaded(saved));
         }
@@ -2269,6 +2288,7 @@ impl ScriptHost {
             api::install(&lua, shared)?;
             lua.sandbox(true)?;
             limit::install(&lua, shared)?;
+            crate::builtin::run(&lua, shared)?;
             let chunk = lua.load(&source).set_name(format!("@{}", self.file));
             let result = within_time_limit(shared, || chunk.exec());
             shared.loading.set(false);
@@ -2404,6 +2424,9 @@ impl ScriptHost {
             log::error!("{text}");
         }
         self.last_error = Some(error);
+        // A failing script may never reach its Enter: the keyboard goes back
+        // to the player, and the kit's text box finds out on its next tick.
+        self.tools.typing.reset();
         // Calling it again would freeze the game for the whole time limit
         // on every tick.
         self.paused = too_long;

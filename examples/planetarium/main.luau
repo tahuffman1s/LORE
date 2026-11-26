@@ -20,11 +20,11 @@
 -- Nothing here is engine code: every part is a file beside this one, and
 -- every call is one of game.sky's. clock.luau keeps the place and the time,
 -- events.luau lists the events, view.luau holds you in place and zooms and
--- labels, and sky_menu.luau builds the menus with menu.luau.
+-- labels, and sky_menu.luau builds the menus with game.menu.
 
 -- The menus' look, said before any menu is made (the pause menu's too):
 -- dark glass, gold for what is chosen, and a shadow behind each.
-local menu = require("./menu")
+local menu = game.menu
 menu.style.back = "#070b18eb"
 menu.style.chosen = "#e9c27a1a"
 menu.style.chosenWords = "#e9c27a"
@@ -44,10 +44,10 @@ local events = require("./events")
 local skyMenu = require("./sky_menu")
 local hud = require("./hud")
 
-local panel = skyMenu.panel
+local tabs = skyMenu.tabs
 
--- The pause menu, made last so that it is drawn over everything else.
-local pauseMenu = require("./pause_menu")
+-- The pause menu is the engine's own: game.pauseMenu.
+local pauseMenu = game.pauseMenu
 
 -- How long the caption of the last jump stays, in seconds of play.
 local CAPTION_SECONDS = 9
@@ -86,7 +86,7 @@ end
 
 skyMenu.onJump(function(event)
     jump(event)
-    panel:close()
+    tabs:close()
 end)
 
 -- The weather stays out of it: a clear, still sky.
@@ -109,22 +109,21 @@ end)
 local labelsAt = table.find(view.labelChoices, view.labels()) or 1
 
 game.onTick(function(step)
-    local paused = pauseMenu.isOpen()
+    local paused = pauseMenu.isOpen
     view.update(paused)
     if paused then
         return
     end
     captionLeft = math.max(0, captionLeft - step)
     keysFor += step
-    if wasInMenu and not panel.isOpen then
+    if wasInMenu and not tabs.isOpen then
         keysFor = 0
     end
-    wasInMenu = panel.isOpen
+    wasInMenu = tabs.isOpen
     if game.input.justPressed("interact") then
-        panel:toggle(skyMenu.events)
+        tabs:toggle(skyMenu.events)
     end
-    panel:update()
-    if panel.isOpen then
+    if tabs.isOpen then
         return
     end
     -- You stand still, so the keys that would move you work the view.
@@ -183,8 +182,7 @@ local function whatIsHappening(): string
 end
 
 game.onDraw(function()
-    local playing = not panel.isOpen and not pauseMenu.isOpen()
-    panel:draw()
+    local playing = not tabs.isOpen and not pauseMenu.isOpen
     view.startFrame()
     -- Labels before the constellations' names, which give way to them.
     view.beginLabels(hud.areas())

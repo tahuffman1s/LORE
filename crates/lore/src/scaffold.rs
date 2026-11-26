@@ -1,8 +1,7 @@
 //! Creates a new game folder from the built-in template.
 //!
 //! This is what `lore new` runs. A new game is a `main.luau` that already
-//! plays, the pause and settings menu it requires (`pause_menu.luau`, made
-//! with `menu.luau`), a small level to play it in, a short README, the files
+//! plays (its pause menu is the engine's own), a small level to play it in, a short README, the files
 //! an editor needs for autocomplete, and a `CLAUDE.md` so Claude Code knows
 //! how to work on the game.
 
@@ -23,9 +22,6 @@ const MAX_NAME_LENGTH: usize = 64;
 const NAME_PLACEHOLDER: &str = "{name}";
 
 const MAIN_SCRIPT: &str = include_str!("../template/main.luau");
-/// The pause and settings menu a new game has, and the menus it is made of.
-const PAUSE_MENU: &str = include_str!("../template/pause_menu.luau");
-const MENU_KIT: &str = include_str!("../template/menu.luau");
 const README: &str = include_str!("../template/README.md");
 const EDITOR_SETTINGS: &str = include_str!("../template/vscode-settings.json");
 const CLAUDE_GUIDE: &str = include_str!("../template/CLAUDE.md");
@@ -246,8 +242,6 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
                 &format!("game.player:setView(\"{}\")", kind.view()),
             )),
         ),
-        (folder.join("pause_menu.luau"), PAUSE_MENU.into()),
-        (folder.join("menu.luau"), MENU_KIT.into()),
         (folder.join(LEVEL_FILE), STARTER_LEVEL.to_vec()),
         (folder.join("README.md"), named(README)),
         (folder.join(TYPES_FILE), TYPE_DEFINITIONS.into()),
@@ -441,10 +435,10 @@ mod tests {
         let script = fs::read_to_string(game.folder.join("main.luau")).unwrap();
         assert!(script.contains("Welcome to my-game!"));
         assert!(!script.contains(NAME_PLACEHOLDER));
-        // The pause menu the script's last line puts in, and what it is made with.
-        assert!(script.contains("require(\"./pause_menu\")"));
-        for (file, text) in [("pause_menu.luau", PAUSE_MENU), ("menu.luau", MENU_KIT)] {
-            assert!(fs::read_to_string(game.folder.join(file)).unwrap() == text);
+        // The menus are the engine's, not copied into the game.
+        assert!(!script.contains("require("));
+        for file in ["pause_menu.luau", "menu.luau"] {
+            assert!(!game.folder.join(file).exists(), "{file} is built in");
         }
         let readme = fs::read_to_string(game.folder.join("README.md")).unwrap();
         assert!(readme.starts_with("# my-game\n") || readme.starts_with("# my-game\r\n"));
@@ -523,26 +517,14 @@ mod tests {
     #[test]
     fn the_example_is_the_template() {
         let example = include_str!("../../../examples/hello/main.luau");
-        assert_eq!(MAIN_SCRIPT.replace(NAME_PLACEHOLDER, "hello"), example);
-    }
-
-    /// The menus are copied, not shared: a game is a folder that holds all
-    /// of itself. The copies are kept the same, so a fix to one is a fix to
-    /// all, and what the alley's README says of `menu.luau` is true of the
-    /// one a new game gets.
-    #[test]
-    fn every_game_has_the_same_menus() {
-        let examples = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
-        for game in ["hello", "jungle", "alley", "planetarium"] {
-            for (file, template) in [("pause_menu.luau", PAUSE_MENU), ("menu.luau", MENU_KIT)] {
-                let copy = fs::read_to_string(format!("{examples}/{game}/{file}")).unwrap();
-                assert!(
-                    copy == template,
-                    "examples/{game}/{file} is not crates/lore/template/{file}: copy one over \
-                     the other"
-                );
-            }
-        }
+        // The example still ends with its own pause menu (a game made
+        // before the engine had one built in); the rest is the template.
+        let rule = "\n-- The pause menu";
+        let before = |text: &str| text.split(rule).next().unwrap_or_default().to_owned();
+        assert_eq!(
+            before(&MAIN_SCRIPT.replace(NAME_PLACEHOLDER, "hello")),
+            before(example)
+        );
     }
 
     #[test]

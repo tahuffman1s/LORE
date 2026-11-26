@@ -57,7 +57,6 @@ keys as they are bound, for keyboard or gamepad.
 | `shaders/` | Three fluid shaders, one function each: `crust.wgsl` (a crust of dark rock drifting on the lava), `slick.wgsl` (the colored bands of a thin film on the oil) and `pulse.wgsl` (bubbles under the slime's skin). `main.luau` turns each on for its kind with one line; they draw the pits and whatever of those kinds the gun pours. Save one while the game runs and it changes. |
 | `places.luau` | Where things are. Written by `build.py`. |
 | `build.py` | Makes the level out of boxes, and lays a small sheet marked `water` over each hollow: that is all a pool needs. The trough has none. |
-| `menu.luau`, `pause_menu.luau` | The pause menu every new game starts with. |
 
 ## How a pool is made
 

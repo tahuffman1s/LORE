@@ -7,6 +7,7 @@ use crate::devices::{GamepadButton, Key, Stick, StickAxis};
 use crate::frame::{ActionState, InputFrame};
 use crate::map::{Action, ActionId, ActionMap, ActionSetId, Conflict, Device};
 use crate::shaping::{PRESS_AT, RELEASE_AT, clamp_length, length, sanitize};
+use crate::typing::Typing;
 
 /// How far the mouse must move, in counts or pixels, to count as picked
 /// up again after a gamepad was used. A bumped desk moves it less.
@@ -63,6 +64,8 @@ pub struct Input {
     device: Device,
     /// How far the mouse has gone since a gamepad was last used, in counts.
     mouse_travel: f32,
+    /// Text typed since the last tick, and whether keys are for typing.
+    typing: Typing,
 }
 
 /// A finished rebind: what [`Input::start_rebind`] heard and did.
@@ -142,6 +145,7 @@ impl Input {
             stale: [false; Button::COUNT],
             device: Device::KeyboardAndMouse,
             mouse_travel: 0.0,
+            typing: Typing::default(),
         }
     }
 
@@ -452,6 +456,10 @@ impl Input {
         } else {
             self.device = Device::KeyboardAndMouse;
         }
+        // While a script takes text, keys are letters and not actions.
+        if self.typing.on && matches!(button, Button::Key(_)) {
+            return;
+        }
         if self.intercept(button) {
             return;
         }
@@ -551,6 +559,42 @@ impl Input {
         self.release_gamepad();
     }
 
+    /// Reports text the player typed, for the next tick's
+    /// [`InputFrame::typed`]. Only the first 64 characters between two
+    /// ticks are kept. `"\u{8}"` is Backspace, `"\n"` Enter and `"\u{1b}"`
+    /// Escape. Text nobody is taking (see [`set_typing`](Self::set_typing))
+    /// is dropped.
+    pub fn type_text(&mut self, text: &str) {
+        if self.typing.on {
+            self.typing.push(text);
+        }
+    }
+
+    /// Turns typing on or off. While on, keyboard keys press no actions
+    /// (mouse and gamepad still do) and typed text is kept for the tick.
+    /// Turning it on lets go of the keys held down.
+    pub fn set_typing(&mut self, on: bool) {
+        if on == self.typing.on {
+            return;
+        }
+        self.typing.on = on;
+        self.typing.clear();
+        if on {
+            for index in 0..Key::COUNT {
+                self.held[index] = false;
+                self.latched[index] = false;
+                self.swallowed[index] = false;
+                self.stale[index] = false;
+            }
+        }
+    }
+
+    /// Whether keyboard keys are for typing, not actions.
+    #[must_use]
+    pub fn is_typing(&self) -> bool {
+        self.typing.on
+    }
+
     /// Reports where the free pointer is and how big the screen is, both in
     /// whatever units the window layer uses (LORE's engine uses HUD units:
     /// pixels on a screen 1080 high). `at` is measured from the top-left
@@ -616,6 +660,9 @@ impl Input {
         self.frame.pointer = self.pointer;
         self.frame.screen = self.screen;
         self.frame.wheel = std::mem::take(&mut self.wheel);
+        self.typing
+            .take_into(&mut self.frame.typed, &mut self.frame.typed_keys);
+        self.frame.device = self.device;
         self.frame.layout = self.layout;
 
         // Taken out while it is filled, so the rest of `self` can be read.
@@ -652,6 +699,7 @@ impl Input {
         frame.pointer = self.pointer;
         frame.screen = self.screen;
         frame.wheel = self.wheel;
+        frame.device = self.device;
         frame.layout = self.layout;
         frame.actions.clear();
         frame.actions.extend(
@@ -769,6 +817,7 @@ mod tests {
     use super::*;
     use crate::devices::{MouseButton, MouseWheel};
     use crate::map::MouseMode;
+    use crate::typing::TypedKey;
 
     struct Rig {
         input: Input,
@@ -1567,6 +1616,40 @@ mod tests {
         assert!(frame.just_released(crouch));
         input.press(Key::C);
         assert!(input.tick().just_pressed(crouch));
+    }
+
+    #[test]
+    fn typed_text_arrives_on_the_next_tick_only_while_typing() {
+        let mut input = Input::new(ActionMap::standard());
+        input.type_text("ignored");
+        input.set_typing(true);
+        input.type_text("Ada");
+        input.type_text("\u{8}\n");
+        let frame = input.tick();
+        assert_eq!(frame.typed, "Ada");
+        assert_eq!(frame.typed_keys, [TypedKey::Backspace, TypedKey::Enter]);
+        let frame = input.tick();
+        assert_eq!(frame.typed, "", "it is taken once");
+        assert!(frame.typed_keys.is_empty());
+        input.set_typing(false);
+        input.type_text("nobody listens");
+        assert_eq!(input.tick().typed, "");
+    }
+
+    #[test]
+    fn typing_keeps_keys_from_actions_but_not_the_gamepad() {
+        let mut input = Input::new(ActionMap::standard());
+        let jump = input.map().action("jump").unwrap();
+        input.press(Key::Space);
+        assert!(input.tick().pressed(jump));
+        input.set_typing(true);
+        assert!(input.is_typing());
+        let frame = input.tick();
+        assert!(!frame.pressed(jump), "held keys let go when typing starts");
+        input.press(Key::Space);
+        assert!(!input.tick().pressed(jump), "keys do not press actions");
+        input.press(GamepadButton::GamepadSouth);
+        assert!(input.tick().pressed(jump), "the gamepad still does");
     }
 
     #[test]

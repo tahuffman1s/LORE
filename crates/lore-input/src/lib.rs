@@ -45,6 +45,7 @@ mod map;
 mod names;
 mod rumble;
 mod shaping;
+mod typing;
 
 pub use binding::{ActionKind, Binding, Button};
 pub use devices::{GamepadButton, Key, MouseButton, MouseWheel, Stick, StickAxis};
@@ -56,3 +57,4 @@ pub use map::{ActionId, ActionMap, ActionSetId, Conflict, Device, MapError, Mous
 pub use names::UnknownName;
 pub use rumble::Rumble;
 pub use shaping::Deadzone;
+pub use typing::TypedKey;

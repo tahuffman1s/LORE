@@ -2,7 +2,7 @@
 -- each. Every row is one call a script can make, such as
 -- game.weather.setFog(0.5) or game.sky.setHour(18).
 
-local menu = require("./menu")
+local menu = game.menu
 
 -- The kinds of weather game.weather.set knows.
 local kinds = { "clear", "fair", "cloudy", "overcast", "fog", "drizzle", "rain", "storm", "sleet", "snow", "blizzard" }
@@ -474,7 +474,7 @@ return menu.new("Weather", {
     menu.slider("Snow lying", { max = 0.6, step = 0.05, get = game.weather.snowDepth, set = game.weather.setSnowDepth, format = centimetres, color = "white" }),
     menu.slider("Ice on water", { max = 0.5, step = 0.02, get = game.weather.ice, set = game.weather.setIce, format = centimetres, color = "#bfe8ff" }),
     menu.button("Lightning", {
-        press = function()
+        onPress = function()
             strike(25)
         end,
         text = function()
@@ -482,7 +482,7 @@ return menu.new("Weather", {
         end,
     }),
     menu.button("Far lightning", {
-        press = function()
+        onPress = function()
             strike(1500)
         end,
         text = function()
@@ -493,7 +493,7 @@ return menu.new("Weather", {
         -- Between tall buildings the sky is a strip, so it comes down where
         -- that strip shows it: 300 m off at the end of the alley you are
         -- looking towards, and it travels down the alley to you and on.
-        press = function()
+        onPress = function()
             if game.weather.tornado() then
                 game.weather.stopTornado()
                 return
@@ -520,7 +520,7 @@ return menu.new("Weather", {
     menu.button("Start again", {
         -- The alley's own day, as main.luau starts it: fair, one in the
         -- afternoon, mild.
-        press = function()
+        onPress = function()
             kept.kind = "fair"
             game.weather.set("fair", 4)
             game.weather.setTemperature(20, 4)

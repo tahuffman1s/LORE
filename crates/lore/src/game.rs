@@ -30,6 +30,11 @@ pub trait Game {
     fn level_saved(&mut self, level: &lore_assets::Scene) {
         let _ = level;
     }
+
+    /// Called when the engine took the keyboard back from a game that was
+    /// typing (the window lost focus, or a new level came in), so the game
+    /// does not think it is still taking text. The default does nothing.
+    fn typing_ended(&mut self) {}
 }
 
 /// A borrowed game is a game, so one can be run and looked at afterwards.
@@ -44,6 +49,10 @@ impl<G: Game + ?Sized> Game for &mut G {
 
     fn level_saved(&mut self, level: &lore_assets::Scene) {
         (**self).level_saved(level);
+    }
+
+    fn typing_ended(&mut self) {
+        (**self).typing_ended();
     }
 }
 
@@ -92,6 +101,8 @@ pub struct Frame {
     close: bool,
     view: Option<View>,
     action_set: Option<ActionSetId>,
+    /// Whether the keyboard is for typing text, if the game said since the last frame.
+    typing: Option<bool>,
     /// The game's actions, when a change to the game made new ones.
     new_actions: Option<ActionMap>,
     rumble: Option<Rumble>,
@@ -268,6 +279,7 @@ impl Frame {
             close: false,
             view: None,
             action_set: None,
+            typing: None,
             new_actions: None,
             rumble: None,
             sounds: Vec::new(),
@@ -842,6 +854,13 @@ impl Frame {
         self.action_set = Some(set);
     }
 
+    /// Says the keyboard is for typing text (`true`) or for the game's
+    /// actions again (`false`): what `game.input.startTyping` does. While
+    /// typing, keys press no actions and the text typed reaches the game.
+    pub(crate) fn set_typing(&mut self, on: bool) {
+        self.typing = Some(on);
+    }
+
     /// Shakes the gamepad the player is holding: `Rumble::new(strong, weak,
     /// seconds)`.
     ///
@@ -907,6 +926,11 @@ impl Frame {
     /// The action set requested this frame, if any.
     pub(crate) fn action_set(&self) -> Option<ActionSetId> {
         self.action_set
+    }
+
+    /// Whether typing was turned on or off this frame, if it was.
+    pub(crate) fn typing(&self) -> Option<bool> {
+        self.typing
     }
 
     /// The rumble requested this frame, if any.

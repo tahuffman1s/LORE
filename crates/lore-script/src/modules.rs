@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use std::{fs, io};
 
-use mlua::{Lua, MultiValue, Value};
+use mlua::{Lua, MultiValue, Table, Value};
 
 use crate::api::{self, Shared, describe, fail};
 use crate::error::closest;
@@ -514,6 +514,28 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     lua.globals().set("require", require)
 }
 
+/// The script an older game carries to make its own pause menu, in its
+/// root or in any folder.
+const OWN_PAUSE_MENU: &str = "pause_menu.luau";
+
+/// Whether the script `name` (a path inside the game) is a pause menu of the
+/// game's own.
+fn is_own_pause_menu(name: &str) -> bool {
+    name.rsplit('/').next() == Some(OWN_PAUSE_MENU)
+}
+
+/// Sets `game.pauseMenu.enabled = false`, the engine's own pause menu's
+/// off switch. Nothing happens if the built-in is not there.
+fn turn_off_pause_menu(lua: &Lua) {
+    let menu = lua
+        .globals()
+        .get::<Table>("game")
+        .and_then(|game| game.get::<Table>("pauseMenu"));
+    if let Ok(menu) = menu {
+        let _ = menu.set("enabled", false);
+    }
+}
+
 /// `require("./weapons")`: runs another of the game's scripts, once, and
 /// gives back what it returned.
 fn require(lua: &Lua, shared: &Shared, asked: &Value) -> mlua::Result<Value> {
@@ -543,6 +565,11 @@ fn require(lua: &Lua, shared: &Shared, asked: &Value) -> mlua::Result<Value> {
         .filter(|file| modules.sources.borrow().contains_key(file))
         .unwrap_or_else(|| ENTRY_SCRIPT.to_owned());
     let name = resolve(&from, &path).map_err(|message| fail(lua, message))?;
+    // A game with its own pause_menu.luau (made when `lore new` copied it
+    // in) has its own pause menu, so the engine's steps aside.
+    if is_own_pause_menu(&name) {
+        turn_off_pause_menu(lua);
+    }
 
     match modules.required.borrow().get(&name) {
         Some(Module::Ready(value)) => return Ok(value.clone()),
@@ -659,6 +686,25 @@ mod tests {
         assert!(!watch.should_reload(None), "deleted before the rename");
         assert!(!watch.should_reload(at(2, 20)));
         assert!(watch.should_reload(at(2, 20)));
+    }
+
+    #[test]
+    fn a_pause_menu_of_the_games_own_is_found_in_any_folder() {
+        for name in [
+            "pause_menu.luau",
+            "ui/pause_menu.luau",
+            "a/b/pause_menu.luau",
+        ] {
+            assert!(is_own_pause_menu(name), "{name}");
+        }
+        for name in [
+            "menu.luau",
+            "my_pause_menu.luau",
+            "pause_menu.luau/x.luau",
+            "pause_menu/main.luau",
+        ] {
+            assert!(!is_own_pause_menu(name), "{name}");
+        }
     }
 
     #[test]
