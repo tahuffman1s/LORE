@@ -352,7 +352,11 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
             let fitted = min(inner_radii, vec4<f32>(min(inner_half.x, inner_half.y)));
             hole = covers(outside_round_box(corner.offset - inner_middle, inner_half, fitted) * scale);
         }
-        covered = outer * (1.0 - hole);
+        // The hole lies inside the outer box, so what is left of a pixel
+        // is one cover less the other. Multiplying them instead leaves a
+        // faint line along a side that has no width, where both edges
+        // cross the same pixel.
+        covered = max(outer - hole, 0.0);
     } else if kind == LINEAR || kind == RADIAL {
         // The pixels of one band of the gradient, mixed between the two
         // colours at its ends. Colours are mixed weighted by how solid they

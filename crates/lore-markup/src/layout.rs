@@ -394,6 +394,8 @@ impl Layouter {
     fn collect_items(&self, env: &Env, el: ElementId) -> Vec<Item> {
         let mut items = Vec::new();
         let mut run: Vec<ElementId> = Vec::new();
+        // Every child of a flex box is an item of it, a `span` too.
+        let in_flex = env.style(el).display == Display::Flex;
         for c in env.doc.children(el) {
             let Some(node) = env.doc.get(c) else { continue };
             let is_run = match &node.kind {
@@ -403,18 +405,22 @@ impl Layouter {
                     if hidden(env.doc, c, cs) {
                         continue;
                     }
-                    *tag == Tag::Br || (cs.display == Display::Inline && !contains_box(env, c))
+                    *tag == Tag::Br
+                        || (cs.display == Display::Inline
+                            && !in_flex
+                            && !placed(cs)
+                            && !contains_box(env, c))
                 }
                 NodeKind::Root => continue,
             };
             if is_run {
                 run.push(c);
             } else {
-                flush_run(env, &mut run, &mut items);
+                flush_run(env, in_flex, &mut run, &mut items);
                 items.push(Item::Box(c));
             }
         }
-        flush_run(env, &mut run, &mut items);
+        flush_run(env, in_flex, &mut run, &mut items);
         items
     }
 
@@ -608,20 +614,27 @@ impl Layouter {
     }
 }
 
-fn flush_run(env: &Env, run: &mut Vec<ElementId>, items: &mut Vec<Item>) {
+fn flush_run(env: &Env, in_flex: bool, run: &mut Vec<ElementId>, items: &mut Vec<Item>) {
     if run.is_empty() {
         return;
     }
+    // Between the items of a flex box a `br` with no text beside it breaks
+    // no line, so it is not an empty item with a gap on each side.
     let blank = run.iter().all(|&c| {
-        env.doc
-            .get(c)
-            .and_then(Node::text)
-            .is_some_and(is_text_blank)
+        env.doc.get(c).is_some_and(|node| {
+            node.text().is_some_and(is_text_blank) || (in_flex && node.tag() == Some(Tag::Br))
+        })
     });
     let r = std::mem::take(run);
     if !blank {
         items.push(Item::Run(r));
     }
+}
+
+/// Whether an element is taken out of the flow and put somewhere by
+/// `position`: a `span` placed so is a box, as it has a place of its own.
+fn placed(cs: &ComputedStyle) -> bool {
+    matches!(cs.position, Positioning::Absolute | Positioning::Fixed)
 }
 
 /// An inline element holding a box has to be a box itself.
@@ -631,8 +644,8 @@ fn contains_box(env: &Env, el: ElementId) -> bool {
             .get(d)
             .and_then(Node::tag)
             .is_some_and(|t| t != Tag::Br)
-            && env.style(d).display != Display::Inline
             && env.style(d).display != Display::None
+            && (env.style(d).display != Display::Inline || placed(env.style(d)))
     })
 }
 

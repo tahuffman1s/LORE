@@ -178,7 +178,7 @@ What it shows:
 | `style` | CSS inside the page. Errors point at the right line of the HTML file. | none |
 | `link` | Names a stylesheet. Void (no closing tag). | `rel` (must be `stylesheet`, required), `href` (required) |
 | `div` | A box. | none |
-| `span`, `label` | Text that flows inside its parent. Not a box (see [Defaults](#defaults-to-know)). | `label`: `for` (read, not used yet) |
+| `span`, `label` | Text that flows inside its parent. A box inside a flex box, when placed by `position`, or when it holds a box (see [Defaults](#defaults-to-know)). | `label`: `for` (read, not used yet) |
 | `kbd` | A box showing the key or button for an action (a key cap: padding, radius, faint fill). Its text is filled in by the game for the device in use; style it as a key cap. | `action` (the action's name, required) |
 | `p` | A paragraph, with space above and below. | none |
 | `h1`, `h2`, `h3` | Headings: bold, 2em, 1.5em, 1.17em. | none |
@@ -490,6 +490,11 @@ If you know HTML and CSS from web pages, these are different here, on purpose.
   `img`, `button`, `input`, `select`, `progress`, `div` and the rest are boxes, laid out
   one under the other. To put boxes in a row, make the parent `display: flex`.
   Running text between inline tags (`Hello <span>there</span>`) is one wrapped line of text.
+  Two things make a `span` or `label` a box like a `div`: a parent that is `display: flex`
+  (every child of a flex box is an item of it, so `<div class="row"><span>Health</span><span>80</span></div>`
+  puts the two at the ends of a `space-between` row, and each can have padding and a border),
+  and `position: absolute` or `fixed`. A `span` that holds a box (a `div`, a `button`, a placed `span`)
+  is a box too, so it starts a line of its own: keep boxes out of running text.
 - **`display` is `flex`, `block` or `none`.** The rest of CSS's layout modes do not exist.
 - **`position: absolute` is placed against its parent box**, not against the nearest
   positioned ancestor. `position: fixed` is placed against the whole screen: it ignores the scroll offsets and clips of the containers it sits in.
