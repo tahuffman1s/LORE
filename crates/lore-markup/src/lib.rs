@@ -14,10 +14,12 @@
 //! # Ok::<(), lore_markup::MarkupError>(())
 //! ```
 
+pub mod css;
 pub mod dom;
 pub mod error;
 pub mod html;
 pub mod intern;
+pub mod selector;
 
 pub use dom::{
     Children, Descendants, Dirty, Document, ElementId, FormState, HandlerKind, InputType, Node,
@@ -26,3 +28,6 @@ pub use dom::{
 pub use error::{MarkupError, did_you_mean};
 pub use html::{Parsed, StyleBlock, StylesheetLink, parse, parse_fragment};
 pub use intern::{Atom, Interner};
+pub use selector::{
+    Combinator, Compound, ElementState, NoState, PseudoClass, Selector, Specificity, matches,
+};
