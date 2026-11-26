@@ -1936,11 +1936,151 @@ impl ScriptHost {
         let Ok(npc) = shared.handles.character(&version.vm, id) else {
             return;
         };
+        let was = self.audio.by.replace(Some(id));
         for handler in handlers {
             if self.paused || !self.call(&shared, &handler, npc.clone()) {
                 break;
             }
         }
+        self.audio.by.set(was);
+    }
+
+    /// How keen the senses of the NPC `id` are (`npc.sightDistance`,
+    /// `sightAngle`, `hearing`, `nightSight`): a person's until the script
+    /// says otherwise.
+    #[must_use]
+    pub fn npc_senses(&self, id: CharacterId) -> crate::NpcSenses {
+        (self.running.as_ref()).map_or_else(crate::NpcSenses::default, |version| {
+            version.shared.npc_version.senses(id)
+        })
+    }
+
+    /// Tells the script the NPC `npc` sees `who` now: they came into its
+    /// view. Its `onSee` functions are called with them, and `canSee` says
+    /// so until [`npc_lost_sight`](Self::npc_lost_sight).
+    pub fn npc_saw(&mut self, npc: CharacterId, who: CharacterId) {
+        self.npcs.set_in_view(npc, who, true);
+        self.tell_npc(npc, who, |handlers| &handlers.npc_saw, |_, _| Ok(None));
+    }
+
+    /// Tells the script `who` went out of the NPC `npc`'s view, last seen
+    /// with their feet at `at`: its `onLoseSight` functions are called with
+    /// them and that place.
+    pub fn npc_lost_sight(&mut self, npc: CharacterId, who: CharacterId, at: [f32; 3]) {
+        self.npcs.set_in_view(npc, who, false);
+        let [x, y, z] = at;
+        self.tell_npc(
+            npc,
+            who,
+            |handlers| &handlers.npc_lost,
+            move |_, _| Ok(Some(mlua::Value::Vector(mlua::Vector::new(x, y, z)))),
+        );
+    }
+
+    /// Tells the script the NPC `npc` heard `noise`: its `onHear` functions
+    /// are called with the same table `game.onNoise` is handed.
+    pub fn npc_heard(&mut self, npc: CharacterId, noise: &crate::NoiseTold) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let handlers = crate::npc_api::sense_handlers(&shared, npc, |h| &h.npc_heard);
+        if handlers.is_empty() || !self.characters.has(npc) {
+            return;
+        }
+        let Ok(table) = weapon_api::noise_table(&version.vm, &shared, noise) else {
+            return;
+        };
+        let was = self.audio.by.replace(Some(npc));
+        for handler in handlers {
+            if self.paused || !self.call(&shared, &handler, table.clone()) {
+                break;
+            }
+        }
+        self.audio.by.set(was);
+    }
+
+    /// Notes that the NPC `npc` sees nobody, telling the script nothing:
+    /// its health is gone, or it was put somewhere else.
+    pub fn npc_blinded(&mut self, npc: CharacterId) {
+        self.npcs.blind(npc);
+    }
+
+    /// Calls the functions `pick` gives for the NPC `npc` with the
+    /// character `who`, and what `more` adds after it.
+    fn tell_npc(
+        &mut self,
+        npc: CharacterId,
+        who: CharacterId,
+        pick: impl Fn(&crate::api::Handlers) -> &Vec<(CharacterId, mlua::Function)>,
+        more: impl Fn(&mlua::Lua, &Shared) -> mlua::Result<Option<mlua::Value>>,
+    ) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let handlers = crate::npc_api::sense_handlers(&shared, npc, pick);
+        if handlers.is_empty() || !self.characters.has(npc) || !self.characters.has(who) {
+            return;
+        }
+        let Ok(seen) = shared.handles.character(&version.vm, who) else {
+            return;
+        };
+        let Ok(more) = more(&version.vm, &shared) else {
+            return;
+        };
+        let was = self.audio.by.replace(Some(npc));
+        for handler in handlers {
+            let called = match &more {
+                Some(more) => self.call(&shared, &handler, (seen.clone(), more.clone())),
+                None => self.call(&shared, &handler, seen.clone()),
+            };
+            if self.paused || !called {
+                break;
+            }
+        }
+        self.audio.by.set(was);
+    }
+
+    /// Tells each NPC with an `onSee`, `onLoseSight` or `onHear` function
+    /// that it saw the player, heard a footstep of theirs and lost sight of
+    /// them, though nobody moved: for `lore check`, so what each does is
+    /// run. Says how many NPCs that was.
+    pub fn pretend_senses(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let shared = Rc::clone(&version.shared);
+        let listening: Vec<CharacterId> = (shared.npcs.all().into_iter())
+            .filter(|&npc| {
+                let handlers = shared.handlers.borrow();
+                [&handlers.npc_saw, &handlers.npc_lost, &handlers.npc_heard]
+                    .iter()
+                    .any(|list| list.iter().any(|(id, _)| *id == npc))
+            })
+            .collect();
+        let player = CharacterId::PLAYER;
+        let at = self.characters.position(player).unwrap_or_default();
+        for &npc in &listening {
+            self.npc_saw(npc, player);
+            self.npc_heard(
+                npc,
+                &crate::NoiseTold {
+                    sound: "footstep",
+                    position: at,
+                    loudness: 0.6,
+                    heard_within: 30.0,
+                    by: Some(player),
+                    weapon: None,
+                },
+            );
+            self.npc_lost_sight(npc, player, at);
+        }
+        listening.len()
+    }
+
+    /// Calls `see` with each sound the script played once at a place since
+    /// the last call (`game.audio.playAt`, unless `npcsHear = false`), in
+    /// the order played, for the world to add to its noises so the NPCs
+    /// hear it. Sets no memory aside.
+    pub fn take_script_noises(&mut self, see: impl FnMut(&crate::ScriptNoise)) {
+        self.audio.take_heard(see);
     }
 
     /// What the scripts asked of the NPCs' bodies since this was last

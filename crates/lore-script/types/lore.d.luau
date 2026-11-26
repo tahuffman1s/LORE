@@ -884,7 +884,8 @@ declare extern type Npc extends Character with
     --- How close the player comes before the NPC turns its head to look at
     --- them, in metres: 5 until the script says otherwise. 0 never looks;
     --- up to 50. The head turns as far as a neck goes, eased, and not round
-    --- to someone behind.
+    --- to someone behind. It only turns the head: what the NPC notices is
+    --- `sightDistance`.
     --- Example: guard.lookDistance = 10
     lookDistance: number
 
@@ -904,6 +905,67 @@ declare extern type Npc extends Character with
     --- rules, not in `game.onDraw`.
     --- Example: game.onDeath(function(victim) if victim == guard then game.after(30, function() guard:remove() end) end end)
     function remove(self): ()
+
+    --- How far the NPC sees in daylight, in metres: 30 until the script says
+    --- otherwise. 0 is blind; a number above 500 is taken as 500. It is what
+    --- the NPC notices (`onSee`), unlike `lookDistance`, which only turns its
+    --- head. Sight is a cone from its eyes the
+    --- way its body faces, blocked by walls and by things fixed in the
+    --- level; someone is seen more weakly the further off they are, toward
+    --- the edge of the cone, in the dark or in fog, crouched or keeping
+    --- still. Behind a low wall, the part that shows is seen.
+    --- Example: guard.sightDistance = 0 -- blind
+    sightDistance: number
+
+    --- How wide the NPC sees, in degrees from one edge to the other: 120
+    --- until the script says otherwise (a person's). 360 sees all round.
+    --- Example: guard.sightAngle = 90
+    sightAngle: number
+
+    --- How well the NPC hears: 1 until the script says otherwise, which
+    --- hears every noise as far as the player can (a footstep 30 metres, a
+    --- gunshot 150). 2 hears twice as far; 0 is deaf; up to 10. A wall
+    --- between it and a noise makes the noise quieter, not silent.
+    --- Example: guard.hearing = 0 -- deaf
+    hearing: number
+
+    --- How well the NPC sees in the dark, from 0 (as a person does, the
+    --- default) to 1 (as well as by day). The dark comes from the hour of
+    --- `game.clock` and the clouds; the game's lamps light it again. A game
+    --- with no clock is always day.
+    --- Example: wolf.nightSight = 1
+    nightSight: number
+
+    --- Calls `handler` with whoever comes into the NPC's view: the player,
+    --- or another NPC (one whose health is gone is seen too: check
+    --- `who.dead`). The NPC looks five times a second, so it is told within
+    --- a fifth of a second of someone stepping out; it is told again only
+    --- after they were lost from view. Called in the game's tick, NPCs in
+    --- the order they were made. Each call adds another function; all are
+    --- called. `lore check` tells it of the player once. For a crowd, give
+    --- each its function in a loop: the NPC is the loop's own variable.
+    --- Example: for _, npc in game.npcs() do npc:onSee(function(who) print(npc.name .. " sees " .. who.name) end) end
+    --- Example: guard:onSee(function(who) if who == game.player then print("Halt!") end end)
+    function onSee(self, handler: (who: Character) -> ()): ()
+
+    --- Calls `handler` when someone the NPC saw goes out of its view: behind
+    --- a wall, out of reach or into the dark. `lastSeen` is where their feet
+    --- were when it last saw them, in metres as `position` is, to go and look.
+    --- Example: guard:onLoseSight(function(who, lastSeen) print("Where did they go?") end)
+    function onLoseSight(self, handler: (who: Character, lastSeen: vector) -> ()): ()
+
+    --- Calls `handler` with each noise the NPC hears: the very noises the
+    --- player hears (steps, shots, splashes, blasts, and sounds a script
+    --- plays at a place), the same `Noise` that `game.onNoise` is handed.
+    --- A noise is heard inside its `heardWithin` times the NPC's `hearing`,
+    --- through walls more quietly. An NPC does not hear its own.
+    --- Example: guard:onHear(function(noise) if noise.weapon then print("A shot!") end end)
+    function onHear(self, handler: (noise: Noise) -> ()): ()
+
+    --- True if the NPC sees `who` now, as of its last look (five times a
+    --- second); false once its health is gone.
+    --- Example: if guard:canSee(game.player) then print("Halt!") end
+    function canSee(self, who: Character): boolean
 end
 
 --- A noise the game made: what a `game.onNoise` function is handed.
@@ -939,8 +1001,9 @@ declare extern type Noise with
     --- Example: if noise.weapon == "bow" then print("an arrow loosed") end
     weapon: string?
     --- Who made it: `game.player` for their steps, landings, shots and
-    --- splashes; nil for what the world makes (thunder, dripping, a blast).
-    --- Only the player makes noises today.
+    --- splashes; the NPC whose own function played a sound with
+    --- `game.audio.playAt`; nil for what the world makes (thunder, dripping,
+    --- a blast) and for any other sound a script plays.
     --- Example: if noise.by == game.player then print("you made that") end
     by: Character?
 end
@@ -1049,7 +1112,9 @@ declare extern type Tween with
 end
 
 --- What `game.npc { ... }` takes to make an NPC.
-type NpcOptions = { name: string, at: string | vector | Thing, facing: number? }
+--- `sightDistance`, `sightAngle`, `hearing` and `nightSight` set its
+--- senses, as the NPC's fields of the same names do.
+type NpcOptions = { name: string, at: string | vector | Thing, facing: number?, sightDistance: number?, sightAngle: number?, hearing: number?, nightSight: number? }
 
 --- Where on the screen a piece of the HUD is pinned.
 type HudPlace = "top left" | "top" | "top right" | "left" | "center" | "right" | "bottom left" | "bottom" | "bottom right"
@@ -4114,16 +4179,25 @@ declare game: {
         --- Example: local music = game.audio.play("music/theme", { volume = 0.4, loop = true })
         play: (name: string, options: { volume: number?, pitch: number?, loop: boolean? }?) -> Sound,
 
-        --- Plays a sound from a place in the world: quieter the further the
-        --- player is from it, and louder in the ear it is nearer to. The
+        --- Plays a sound from a place in the world, which NPCs hear too:
+        --- quieter the further the player is from it, and louder in the ear
+        --- it is nearer to. The
         --- place is `vector.create(x, y, z)` in metres, with y up. Takes the
         --- options of `play`, and:
         ---   range: how many metres away it can still be heard, above 0. If
         ---     left out, a sound of your own carries 50 metres, and a starter
         ---     sound as far as the real thing: a gunshot 150, a footstep 30.
+        ---   npcsHear: false to keep NPCs from hearing it. Played once (not
+        ---     looped), it is a noise NPCs hear as the player does, as far as
+        ---     its range, as loud as its volume: a bottle a script smashes
+        ---     draws a guard (`npc:onHear`). A looped sound is the sound of a
+        ---     place, and no NPC hears it. Played from an NPC's own function
+        ---     (`onSee`, `onHear`, `onLoseSight`, `onUse`), it is that NPC's:
+        ---     `noise.by` is the NPC, and the NPC does not hear itself.
         --- Example: game.audio.playAt("gunshot", vector.create(10, 1, -4))
         --- Example: game.audio.playAt("alarm", vector.create(0, 3, 0), { range = 80, loop = true })
-        playAt: (name: string, position: vector, options: { volume: number?, pitch: number?, loop: boolean?, range: number? }?) -> Sound,
+        --- Example: game.audio.playAt("whisper", game.player.eye, { npcsHear = false })
+        playAt: (name: string, position: vector, options: { volume: number?, pitch: number?, loop: boolean?, range: number?, npcsHear: boolean? }?) -> Sound,
 
         --- Stops every sound the script has played, such as when the player
         --- leaves a place. Sounds keep playing when the script is saved and loaded

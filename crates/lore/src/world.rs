@@ -27,6 +27,7 @@ mod climate;
 mod fluids;
 mod ground;
 mod npcs;
+mod sensing;
 mod spawn;
 mod trail;
 mod walk;
@@ -65,6 +66,8 @@ pub struct World {
     dummies: Vec<Dummy>,
     /// The NPCs, in the order of their ids.
     npcs: npcs::Npcs,
+    /// What the NPCs see and hear, kept from tick to tick.
+    sensing: sensing::Sensing,
     /// The number the next dummy or NPC is known by to a weapon. The player
     /// is 0.
     next_target: u32,
@@ -277,6 +280,7 @@ impl World {
             player: Body { player, asked },
             dummies: Vec::new(),
             npcs,
+            sensing: sensing::Sensing::default(),
             next_target,
             standing: Vec::new(),
             tick: 0,
@@ -605,6 +609,13 @@ impl World {
     /// else is asked.
     pub fn ask(&mut self, asked: PlayerInput) {
         self.player.asked = asked;
+    }
+
+    /// How many rays the NPCs' senses cast at the level in the newest tick:
+    /// what a crowd's sight and hearing cost.
+    #[must_use]
+    pub fn sense_rays(&self) -> u32 {
+        self.sensing.rays
     }
 
     /// The noises the player made in the newest tick, in the order they
@@ -1323,6 +1334,23 @@ impl Game for World {
             }
         }
         self.game.tick(input, step);
+        // What the script played at a place in its tick is heard by the
+        // NPCs as the player hears it.
+        let (now, noises, names) = (self.tick, &mut self.noises, &mut self.names);
+        self.game.take_script_noises(|noise, range| {
+            let mut heard = Noise::new(
+                crate::noise::NoiseKind::Script,
+                noise.position,
+                noise.loudness,
+                1.0,
+                0.0,
+                now,
+            );
+            heard.range = range;
+            heard.sound = names.intern(&noise.sound);
+            heard.by = noise.by;
+            noises.push(heard);
+        });
         // The script may have put the player somewhere.
         self.teleport();
         // Lightning the script asked for in this tick falls where it asked,
@@ -1335,6 +1363,18 @@ impl Game for World {
                 .map_or(place, |hit| hit.point);
             self.strike(struck);
         }
+        // Last, what each NPC sees and hears of the tick, the script's own
+        // sounds among it, and what the script is told of that.
+        let this_tick = sensing::Tick {
+            tick: self.tick,
+            level: &self.ground.level,
+            rules: &self.ground.rules,
+            player: &self.player.player,
+            noises: &self.noises,
+            names: &self.names,
+            weather: self.climate.weather(),
+        };
+        (self.sensing).tick(&mut self.npcs, self.game.host_mut(), &this_tick);
     }
 
     /// The script's own presenting, such as its HUD and its rumble.

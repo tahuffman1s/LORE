@@ -55,6 +55,10 @@ pub enum NoiseKind {
     Explosion,
     /// A bullet or a rocket striking a surface, heard from where it did.
     Impact,
+    /// A sound a script played once at a place (`game.audio.playAt`): in
+    /// the list so the NPCs hear it, but neither played again from it (the
+    /// script's own request plays it) nor told to `game.onNoise`.
+    Script,
 }
 
 impl NoiseKind {
@@ -82,6 +86,7 @@ impl NoiseKind {
             Self::FarThunder => "thunder-far",
             Self::Explosion => "explosion",
             Self::Impact => "impact",
+            Self::Script => "",
         }
     }
 
@@ -92,7 +97,7 @@ impl NoiseKind {
     pub const fn is_at_a_place(self) -> bool {
         matches!(
             self,
-            Self::Patter | Self::Pour | Self::Explosion | Self::Impact
+            Self::Patter | Self::Pour | Self::Explosion | Self::Impact | Self::Script
         )
     }
 
@@ -106,6 +111,7 @@ impl NoiseKind {
                 | Self::Pour
                 | Self::Explosion
                 | Self::Impact
+                | Self::Script
                 | Self::Thunder
                 | Self::FarThunder
         )
@@ -158,6 +164,11 @@ impl NoiseKind {
                 far: 40.0,
             },
             Self::DryFire | Self::Reload => Range {
+                near: 1.0,
+                far: 50.0,
+            },
+            // Most sounds' reach; a script's own carries as it is played.
+            Self::Script => Range {
                 near: 1.0,
                 far: 50.0,
             },
@@ -356,7 +367,8 @@ pub(crate) fn play(
     tweak: lore_script::SoundTweak,
 ) -> Option<Play> {
     let seed = noise.tick.wrapping_mul(31).wrapping_add(nth);
-    if noise.silenced || tweak.volume <= 0.0 {
+    // A script's sound is already played by its own request.
+    if noise.silenced || tweak.volume <= 0.0 || noise.kind == NoiseKind::Script {
         return None;
     }
     // A replacement the game has no sound ready for must not silence the

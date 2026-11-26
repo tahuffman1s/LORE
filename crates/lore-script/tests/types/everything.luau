@@ -702,6 +702,18 @@ if false then
     for _, npc: Npc in game.npcs() do
         if npc.dead then npc:remove() end
     end
+    local watcher: Npc = game.npc { name = "Watcher", at = "Gate", sightDistance = 40, sightAngle = 90, hearing = 2, nightSight = 0.5 }
+    watcher.sightDistance = 0
+    watcher.sightAngle = 360
+    watcher.hearing = 0
+    watcher.nightSight = 1
+    print(watcher.sightDistance, watcher.sightAngle, watcher.hearing, watcher.nightSight)
+    watcher:onSee(function(who: Character) print(who.name, who.dead) end)
+    watcher:onLoseSight(function(who: Character, lastSeen: vector) print(who.name, lastSeen.x) end)
+    watcher:onHear(function(noise: Noise) print(noise.sound, noise.by, noise.weapon, noise.loudness) end)
+    local sees: boolean = watcher:canSee(game.player)
+    print(sees)
+    game.audio.playAt("landing", watcher.position, { npcsHear = false })
 end
 game.showUsePrompt(true)
 local meant: (Thing | Npc)? = game.player.lookingAt

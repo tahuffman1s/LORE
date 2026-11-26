@@ -214,7 +214,7 @@ fn wrong_arguments_say_how_to_write_the_call() {
         (
             r#"game.audio.playAt("door", vector.create(0, 0, 0), { distance = 5 })"#,
             "game.audio.playAt has no option called `distance`. Its options are: volume, \
-             pitch, loop, range.",
+             pitch, loop, range, npcsHear.",
         ),
         (
             r#"game.audio.play("door", { volume = "loud" })"#,
