@@ -173,10 +173,37 @@ impl Played {
 }
 
 #[test]
+fn a_new_game_greets_and_counts_jumps_on_its_screen() {
+    let mut played = Played::new();
+    assert!(played.shows("Welcome to test!"), "{:?}", played.words());
+    assert!(played.shows("Jumps: 0"), "{:?}", played.words());
+
+    played.tap(Key::Space);
+    assert!(played.shows("Jumps: 1"), "{:?}", played.words());
+    assert!(!played.shows("Jumps: 0"));
+
+    // The welcome goes away after eight seconds; the count stays.
+    for _ in 0..8 * 60 {
+        played.step();
+    }
+    assert!(!played.shows("Welcome to test!"), "{:?}", played.words());
+    assert!(played.shows("Jumps: 1"), "{:?}", played.words());
+}
+
+#[test]
 fn escape_pauses_the_world_and_shows_the_menu_and_resume_lets_it_go_on() {
     let mut played = Played::new();
     assert_eq!(played.set(), "gameplay");
-    assert_eq!(played.words(), Vec::<&str>::new(), "no menu yet");
+    let hud = [
+        "Welcome to test!",
+        "Walk to the tower. Space or the bottom face button jumps.",
+        "Jumps: 0",
+    ];
+    assert_eq!(
+        played.words(),
+        hud,
+        "only the new game's own HUD, no menu yet"
+    );
     played.step();
     let before = played.world.tick_number();
     assert!(before > 0);
@@ -201,7 +228,7 @@ fn escape_pauses_the_world_and_shows_the_menu_and_resume_lets_it_go_on() {
     played.tap(Key::Enter);
     assert!(!played.host().paused());
     assert_eq!(played.set(), "gameplay");
-    assert_eq!(played.words(), Vec::<&str>::new());
+    assert_eq!(played.words(), hud, "the menu is gone, the HUD is back");
     played.step();
     assert!(played.world.tick_number() > paused_at);
     assert!(!played.closed);
@@ -513,8 +540,8 @@ fn the_menu_goes_back_to_the_action_set_and_the_pause_the_game_had() {
     // A game with a shop of its own, in the "menu" set, that pauses the
     // game itself and opens the pause menu from in there.
     let main = r#"
-        game.input.bind("shop", { "F3" })
-        game.input.bind("help", { "F4" })
+        game.input.bind("shop", { "F3", "LeftBumper" })
+        game.input.bind("help", { "F4", "GamepadSelect" })
         local pauseMenu = game.pauseMenu
         game.onTick(function()
             if game.input.justPressed("shop") then

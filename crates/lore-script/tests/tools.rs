@@ -13,7 +13,8 @@ use lore_input::{
 };
 use lore_script::weapons::Zone;
 use lore_script::{
-    CharacterId, ENTRY_SCRIPT, HudShape, Motion, Movement, ScriptHost, Teleport, WeaponHit,
+    BindingChange, CharacterId, ControlsChange, ENTRY_SCRIPT, HudShape, Motion, Movement,
+    ScriptHost, Teleport, WeaponHit,
 };
 
 thread_local! {
@@ -252,88 +253,28 @@ fn an_engine_action_cannot_be_bound_again() {
 #[test]
 fn binding_one_name_twice_in_a_version_is_a_mistake() {
     let message = load_mistake(
-        "game.input.bind(\"open_map\", { \"F1\" })\ngame.input.bind(\"open_map\", { \"F2\" })",
+        "game.input.bind(\"open_map\", { \"F1\", \"LeftBumper\" })\n\
+         game.input.bind(\"open_map\", { \"F2\", \"LeftBumper\" })",
     );
     assert!(message.contains("twice"), "{message}");
 }
 
 #[test]
-fn a_button_with_no_gamepad_button_or_a_clash_is_a_warning_not_a_failure() {
-    let _host = game(r#"game.input.bind("open_map", { "F1" })"#);
-    let said = warnings();
-    assert!(said.iter().any(|w| w.contains("LeftBumper")), "{said:?}");
+fn a_button_with_no_gamepad_button_is_a_mistake_and_a_clash_a_warning() {
+    let message = load_mistake(r#"game.input.bind("open_map", { "F1" })"#);
+    assert!(message.contains("needs a gamepad button too"), "{message}");
+    assert!(message.contains("LeftBumper"), "{message}");
+    let message = load_mistake(r#"game.input.bind("open_map", { "GamepadSelect" })"#);
+    assert!(
+        message.contains("needs a keyboard or mouse button too"),
+        "{message}"
+    );
 
     let _host = game(r#"game.input.bind("heal", { "Space", "GamepadSelect" })"#);
     let said = warnings();
     assert!(
         said.iter()
             .any(|w| w.contains("\"Space\"") && w.contains("heal")),
-        "{said:?}"
-    );
-}
-
-#[test]
-fn a_reload_keeps_the_players_bindings_and_warns_of_a_new_action() {
-    let folder = GameFolder::new(OPEN_MAP);
-    let mut host = folder.open();
-    // The engine takes the map, and the player rebinds the action.
-    let mut map = host.actions();
-    let open = map.action("open_map").unwrap();
-    map.replace_button(
-        open,
-        "F1".parse().map(|b: lore_input::Button| b).unwrap(),
-        "F5".parse().unwrap(),
-    );
-    run(&mut host, 1);
-    warnings();
-
-    folder.write(&format!(
-        "{OPEN_MAP}\ngame.input.bind(\"zoom\", {{ \"Z\", \"LeftBumper\" }})"
-    ));
-    host.reload().unwrap();
-    let said = warnings();
-    assert!(
-        said.iter()
-            .any(|w| w.contains("will not hear it until the game is started again")),
-        "{said:?}"
-    );
-    // The name the map already had changed nothing, and the new one is in
-    // the host's map for the next start of the game.
-    let after = host.actions();
-    assert!(after.action("zoom").is_ok());
-    assert_eq!(
-        after.bindings(after.action("open_map").unwrap()).len(),
-        2,
-        "its bindings were not added again"
-    );
-    // The engine's old map does not know it: reading it reads not pressed.
-    let mut input = Input::new(map);
-    host.tick(input.tick(), STEP);
-    assert!(host.last_error().is_none());
-}
-
-#[test]
-fn a_reload_with_other_keys_for_an_existing_action_says_they_wait() {
-    let folder = GameFolder::new(OPEN_MAP);
-    let mut host = folder.open();
-    infos();
-    // The same keys in another order say nothing.
-    folder.write(&OPEN_MAP.replace(
-        "{ \"F1\", \"GamepadSelect\" }",
-        "{ \"GamepadSelect\", \"F1\" }",
-    ));
-    host.reload().unwrap();
-    let said = infos();
-    assert!(
-        said.iter().all(|line| !line.contains("open_map")),
-        "{said:?}"
-    );
-    folder.write(&OPEN_MAP.replace("\"F1\"", "\"F6\""));
-    host.reload().unwrap();
-    let said = infos();
-    assert!(
-        said.iter()
-            .any(|line| line.contains("open_map") && line.contains("started again")),
         "{said:?}"
     );
 }
@@ -1340,4 +1281,128 @@ fn a_script_that_fails_while_typing_gives_the_keyboard_back() {
     run(&mut host, 1);
     assert!(host.last_error().is_some());
     assert_eq!(host.take_typing(), Some(false));
+}
+
+fn reread(problem: Option<&str>) -> ControlsChange {
+    ControlsChange {
+        message: problem.map_or_else(
+            || "Controls updated: jump Space to F".to_owned(),
+            str::to_owned,
+        ),
+        changes: vec![BindingChange {
+            action: "jump".to_owned(),
+            before: "Space".to_owned(),
+            after: "F".to_owned(),
+        }],
+        problem: problem.map(str::to_owned),
+        file: "bindings.toml".to_owned(),
+        line: problem.map(|_| 4),
+    }
+}
+
+const HEAR_CONTROLS: &str = r#"
+    game.input.onControlsChanged(function(change)
+        local one = change.changes[1]
+        print(change.message, one.action, one.before, one.after, change.file,
+            tostring(change.line), tostring(change.problem))
+    end)
+"#;
+
+#[test]
+fn a_script_hears_that_the_controls_were_read_again_with_what_changed() {
+    let mut host = game(HEAR_CONTROLS);
+    host.controls_changed(reread(None));
+    assert_eq!(printed(), Vec::<String>::new(), "told on the next tick");
+    run(&mut host, 1);
+    assert_eq!(
+        printed(),
+        ["Controls updated: jump Space to F jump Space F bindings.toml nil nil"]
+    );
+    run(&mut host, 1);
+    assert_eq!(printed(), Vec::<String>::new(), "told once");
+}
+
+#[test]
+fn a_script_hears_of_a_bad_file_with_its_line_and_what_is_wrong() {
+    let mut host = game(HEAR_CONTROLS);
+    host.controls_changed(reread(Some(
+        "bindings.toml line 4: \"Spcae\" is not a button",
+    )));
+    run(&mut host, 1);
+    let said = printed();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].ends_with(" bindings.toml 4 bindings.toml line 4: \"Spcae\" is not a button"));
+}
+
+#[test]
+fn rereads_are_told_in_order_one_by_one() {
+    let mut host = game(
+        r#"
+        local heard = 0
+        game.input.onControlsChanged(function(change)
+            heard += 1
+            print(heard, change.message)
+        end)
+    "#,
+    );
+    host.controls_changed(reread(None));
+    host.controls_changed(reread(Some("bad")));
+    run(&mut host, 1);
+    assert_eq!(printed(), ["1 Controls updated: jump Space to F", "2 bad"]);
+}
+
+#[test]
+fn the_engines_own_notice_is_on_until_the_script_turns_it_off() {
+    let mut host = game("game.onTick(function() end)");
+    assert!(host.controls_notice_shown());
+    let host2 = game("game.input.showControlsNotice(false)");
+    assert!(!host2.controls_notice_shown());
+    let again = game("game.input.showControlsNotice(false) game.input.showControlsNotice(true)");
+    assert!(again.controls_notice_shown());
+    run(&mut host, 1);
+    assert!(host.controls_notice_shown());
+}
+
+#[test]
+fn turning_the_notice_off_survives_a_saved_script() {
+    let folder = GameFolder::new("game.input.showControlsNotice(false)");
+    let mut host = folder.open();
+    assert!(!host.controls_notice_shown());
+    folder.write("game.onTick(function() end)");
+    host.reload().unwrap();
+    assert!(!host.controls_notice_shown(), "lasts until set back");
+    folder.write("game.input.showControlsNotice(true)");
+    host.reload().unwrap();
+    assert!(host.controls_notice_shown());
+}
+
+#[test]
+fn the_notice_and_the_event_are_checked_for_what_they_take() {
+    let folder = GameFolder::new("\ngame.input.showControlsNotice(\"off\")");
+    let host = folder.open();
+    let error = host.last_error().unwrap();
+    assert_eq!(
+        (error.file.as_str(), error.line),
+        ("main.luau", Some(2)),
+        "names the script line: {error:?}"
+    );
+    let said = load_mistake("game.input.showControlsNotice(\"off\")");
+    assert!(said.contains("needs true or false"), "{said}");
+    assert!(
+        said.contains("game.input.showControlsNotice(false)"),
+        "{said}"
+    );
+    let said = load_mistake("game.input.onControlsChanged(5)");
+    assert!(
+        said.contains("game.input.onControlsChanged needs a function"),
+        "{said}"
+    );
+}
+
+#[test]
+fn step_loudness_goes_no_higher_than_four() {
+    let mut host = game("game.onStart(function() game.player:setStepLoudness(99) end)");
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert_eq!(host.last_error(), None);
+    assert_eq!(host.moves().step_loudness, 4.0);
 }

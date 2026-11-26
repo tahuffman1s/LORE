@@ -68,6 +68,8 @@ game.player:setFlySpeed("fast") -- wrong: a speed is a number
 game.setTimeSpeed("slow") -- wrong: a speed is a number
 game.input.bind("open_map", "F1") -- wrong: the buttons are a list
 game.input.bind("open_map") -- wrong: it needs buttons
+game.input.addSet("riding", { mouse = "hover" }) -- wrong: the mouse is "look" or "pointer"
+game.input.bind("gallop", { "H", "LeftBumper" }, { set = 5 }) -- wrong: a set is named in quotes
 local fast: string = game.frames.rate() -- wrong: a rate is a number
 local slow: number = game.frames.slowest() -- wrong: it is game.frames.slowestTime(), in seconds
 local held: string = health.pressed -- wrong: pressed is true or false
@@ -87,3 +89,5 @@ game.pause(true) -- wrong: it takes nothing; game.resume() lets the game go on
 game.shaders.screen(5) -- wrong: a shader is named in quotes
 game.shaders.surface("lava", { glow = 2 }) -- wrong: it needs the material's name before the values
 game.shaders.screen("heat"):set(5, 0.8) -- wrong: a value is named in quotes
+game.input.showControlsNotice("off") -- wrong: it takes true or false
+game.input.onControlsChanged(5) -- wrong: it takes a function

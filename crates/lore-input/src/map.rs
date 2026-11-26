@@ -61,8 +61,11 @@ pub(crate) struct Action {
     /// What the action's direction (a stick, or keys) is multiplied by on
     /// top of nothing else: mouse movement has `sensitivity`.
     pub(crate) stick_sensitivity: [f32; 2],
-    /// Whether a game added the action for itself: it is live in every set.
+    /// Whether a game added the action for itself.
     pub(crate) own: bool,
+    /// Whether the action is live in every set: a game's own action that
+    /// was not given a set of its own.
+    pub(crate) everywhere: bool,
 }
 
 /// Named actions and the keys, buttons and sticks that drive them.
@@ -204,6 +207,34 @@ impl ActionMap {
     #[must_use]
     pub fn mouse_mode(&self, set: ActionSetId) -> Option<MouseMode> {
         self.sets.get(set.0).map(|s| s.mouse)
+    }
+
+    /// A number that says what the map is made of: its sets (names and mouse
+    /// use) and its actions (name, kind and set, in order). Two maps with the
+    /// same number give an action the same id, so a frame made from one can be
+    /// read with the other. Bindings do not count.
+    ///
+    /// It walks the whole map: keep the answer rather than asking every tick.
+    #[must_use]
+    pub fn layout(&self) -> u64 {
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |bytes: &[u8]| {
+            for byte in bytes.iter().chain(&[0xff]) {
+                hash = (hash ^ u64::from(*byte)).wrapping_mul(PRIME);
+            }
+        };
+        for set in &self.sets {
+            eat(set.name.as_bytes());
+            eat(&[set.mouse as u8]);
+        }
+        eat(b"actions");
+        for action in &self.actions {
+            eat(action.name.as_bytes());
+            eat(&[action.kind as u8]);
+            eat(&(action.set.0 as u64).to_le_bytes());
+        }
+        hash
     }
 
     /// The set the action belongs to, or `None` for an id from a different map.
@@ -379,6 +410,52 @@ impl ActionMap {
         made
     }
 
+    /// Adds a button action a game makes for itself that is heard only
+    /// while `set` is live, such as a key that only works on horseback.
+    ///
+    /// It is checked exactly like [`own_button`](Self::own_button), and kept
+    /// in the bindings file in the same table. What differs is the set:
+    /// [`set_of`](Self::set_of) says `set`, and the action does nothing while
+    /// another set is live. A `set` from a different map is taken as
+    /// [`GAMEPLAY`](Self::GAMEPLAY).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the name is taken or empty, or if a binding is misspelled or is
+    /// not a button.
+    pub fn own_button_in<I>(
+        &mut self,
+        name: &str,
+        bindings: I,
+        set: ActionSetId,
+    ) -> Result<ActionId, MapError>
+    where
+        I: IntoIterator<Item: AsRef<str>>,
+    {
+        let before = self.adding_to;
+        self.adding_to = if self.mouse_mode(set).is_some() {
+            set
+        } else {
+            Self::GAMEPLAY
+        };
+        let made = self.add_named(name, ActionKind::Button, bindings, true);
+        self.adding_to = before;
+        if let Ok(id) = made {
+            self.actions[id.0].everywhere = false;
+        }
+        made
+    }
+
+    /// Whether `action` is heard while `set` is live: it belongs to the set,
+    /// or it is a game's own action with no set of its own. False for an id
+    /// from a different map.
+    #[must_use]
+    pub fn is_heard_in(&self, action: ActionId, set: ActionSetId) -> bool {
+        self.actions
+            .get(action.0)
+            .is_some_and(|a| a.everywhere || a.set == set)
+    }
+
     /// Whether a game added the action for itself with
     /// [`own_button`](Self::own_button). False for an id from a different map.
     #[must_use]
@@ -508,6 +585,7 @@ impl ActionMap {
             sensitivity: [1.0, 1.0],
             stick_sensitivity: [1.0, 1.0],
             own,
+            everywhere: own,
         });
         Ok(ActionId(self.actions.len() - 1))
     }
@@ -672,7 +750,7 @@ impl ActionMap {
         let mut found: Vec<Conflict> = Vec::new();
         for (index, first) in self.actions.iter().enumerate() {
             for second in &self.actions[index + 1..] {
-                if second.set != first.set && !first.own && !second.own {
+                if second.set != first.set && !first.everywhere && !second.everywhere {
                     continue;
                 }
                 // An action a game made for itself may take the button of
@@ -1457,5 +1535,28 @@ mod tests {
         // What the map made for itself is still the standard's own, and
         // later actions still join gameplay.
         assert!(!map.is_own(map.action("menu_click").unwrap()));
+    }
+
+    #[test]
+    fn an_own_button_in_a_set_is_heard_only_there() {
+        let mut map = ActionMap::standard();
+        let riding = map.add_set("riding", MouseMode::Look).unwrap();
+        let gallop = map
+            .own_button_in("gallop", ["H", "LeftBumper"], riding)
+            .unwrap();
+        let wave = map.own_button("wave", ["F3", "DpadUp"]).unwrap();
+        assert!(map.is_own(gallop));
+        assert_eq!(map.set_of(gallop), Some(riding));
+        assert!(map.is_heard_in(gallop, riding));
+        assert!(!map.is_heard_in(gallop, ActionMap::GAMEPLAY));
+        assert!(map.is_heard_in(wave, riding));
+        assert!(map.is_heard_in(wave, ActionMap::GAMEPLAY));
+        // Another set's actions are checked only against its own: H is free.
+        assert!(
+            map.conflicts()
+                .iter()
+                .all(|clash| clash.first != "gallop" && clash.second != "gallop")
+        );
+        assert!(map.own_button_in("gallop", ["J"], riding).is_err());
     }
 }

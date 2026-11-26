@@ -83,6 +83,10 @@ pub struct Frame {
     gamepad_style: GamepadStyle,
     /// The controls, in the one frame after they changed.
     controls: Option<ActionMap>,
+    /// What reading the controls again came to, in the one frame after.
+    controls_change: Option<lore_script::ControlsChange>,
+    /// Whether the game turned the engine's notice of that off.
+    controls_notice_hidden: bool,
     /// The player's own size for the HUD and menus.
     ui_scale: f32,
     /// How fast game time runs, if the game said this frame.
@@ -99,6 +103,8 @@ pub struct Frame {
     action_set: Option<ActionSetId>,
     /// Whether the keyboard is for typing text, if the game said since the last frame.
     typing: Option<bool>,
+    /// The game's actions, when a change to the game made new ones.
+    new_actions: Option<ActionMap>,
     rumble: Option<Rumble>,
     /// The sounds to start and stop. Empty, and so without memory of its
     /// own, in a frame that asks for none.
@@ -262,6 +268,8 @@ impl Frame {
             device: Device::KeyboardAndMouse,
             gamepad_style: GamepadStyle::Xbox,
             controls: None,
+            controls_change: None,
+            controls_notice_hidden: false,
             ui_scale: 1.0,
             time_speed: None,
             settings: None,
@@ -272,6 +280,7 @@ impl Frame {
             view: None,
             action_set: None,
             typing: None,
+            new_actions: None,
             rumble: None,
             sounds: Vec::new(),
             splashes: Vec::new(),
@@ -561,6 +570,33 @@ impl Frame {
     pub(crate) fn with_controls(mut self, controls: Option<ActionMap>) -> Self {
         self.controls = controls;
         self
+    }
+
+    /// What reading the player's bindings file again came to, in the one
+    /// frame after: the actions that changed, or what is wrong with the file.
+    /// `None` in every other frame.
+    #[must_use]
+    pub fn controls_change(&self) -> Option<&lore_script::ControlsChange> {
+        self.controls_change.as_ref()
+    }
+
+    pub(crate) fn with_controls_change(
+        mut self,
+        change: Option<lore_script::ControlsChange>,
+    ) -> Self {
+        self.controls_change = change;
+        self
+    }
+
+    /// Turns the engine's own notice of a reread of the controls off (or
+    /// back on), for a game that shows it its own way.
+    pub fn hide_controls_notice(&mut self, hidden: bool) {
+        self.controls_notice_hidden = hidden;
+    }
+
+    /// Whether the game turned the engine's notice of the controls off.
+    pub(crate) fn controls_notice_hidden(&self) -> bool {
+        self.controls_notice_hidden
     }
 
     /// Says how far the wheel was rolled over the free pointer.
@@ -866,6 +902,25 @@ impl Frame {
     /// Where the game asked the world to be seen from this frame, if it did.
     pub(crate) fn view(&self) -> Option<View> {
         self.view
+    }
+
+    /// Replaces the game's own actions and action sets while it runs, as a
+    /// saved script does when it adds, changes or removes one.
+    ///
+    /// `actions` is the game's map: the standard controls and the game's own
+    /// on top, as they were first given in [`Config::actions`](crate::Config).
+    /// The window reads the player's bindings file onto it again and puts the
+    /// result into use, so what the player rebound stays rebound. The frame
+    /// after, [`new_controls`](Self::new_controls) has the map. Ids of the
+    /// standard actions stay as they were as long as the game only adds
+    /// actions after them. A game run with no window ignores this.
+    pub fn replace_actions(&mut self, actions: ActionMap) {
+        self.new_actions = Some(actions);
+    }
+
+    /// The actions a game replaced this frame, if it did.
+    pub(crate) fn take_new_actions(&mut self) -> Option<ActionMap> {
+        self.new_actions.take()
     }
 
     /// The action set requested this frame, if any.

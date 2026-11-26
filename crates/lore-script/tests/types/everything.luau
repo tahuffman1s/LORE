@@ -61,6 +61,17 @@ game.onSpawn(function()
 end)
 
 game.audio.stopAll()
+game.audio.setVolume("footstep", 0.3)
+print(game.audio.getVolume("footstep"))
+game.audio.replace("footstep", "gunshot")
+game.audio.replace("footstep", nil)
+game.onNoise(function(noise)
+    local loud: number = noise.loudness
+    print(noise.sound, noise.position.x, loud, noise.heardWithin, noise.byPlayer)
+    if noise.sound == "thunder" then
+        return false
+    end
+end)
 game.audio.play("gunshot")
 local music = game.audio.play("music", { volume = 0.4, pitch = 1, loop = true })
 music:stop()
@@ -103,6 +114,10 @@ game.weapon("smg", {
     reach = 300,
     roundsPerMinute = 900,
     burstPause = 0.15,
+    fireSound = "twang",
+    reloadSound = "reload",
+    emptySound = "dry-fire",
+    heardWithin = 20,
     raiseTime = 0.3,
     pellets = 1,
     magazineSize = 25,
@@ -322,6 +337,13 @@ end)
 -- A button of the game's own, the pointer and the wheel, and stepping
 -- through a menu.
 game.input.bind("open_map", { "F1", "GamepadSelect" })
+game.input.addSet("riding", { mouse = "look" })
+game.input.addSet("shop", { mouse = "pointer" })
+game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })
+for _, setName in game.input.sets() do
+    print(setName, #game.input.actions(setName), #game.input.actions())
+end
+print(table.concat(game.input.bindings("gallop"), ", "))
 local mapShown = false
 local selected = 1
 local scroll = 0
@@ -394,6 +416,9 @@ game.onTick(function()
         game.player:setSwimSpeed(2)
         game.player:setJumpHeight(2.5)
         game.player:setGravity(1.6)
+        game.player:setStride(1.5)
+        game.player:setStepLoudness(0.5)
+        print(game.player.stride, game.player.stepLoudness)
         game.player:setAbility("vault", true)
         game.player:setAbility("climb", true)
         game.player:setAbility("swim", false)
@@ -835,3 +860,13 @@ game.pauseMenu:open()
 game.pauseMenu:close()
 local pausedByMenu: boolean = game.pauseMenu.isOpen
 print(game.pauseMenu.title, pausedByMenu)
+game.input.showControlsNotice(false)
+game.input.onControlsChanged(function(change)
+    hint.text = change.message
+    for _, one in change.changes do
+        print(one.action, one.before, one.after)
+    end
+    if change.problem then
+        print(change.file, change.line or 0, change.problem)
+    end
+end)

@@ -31,6 +31,10 @@ pub(crate) const WEAPON_SETTINGS: &[&str] = &[
     "fireMode",
     "burstSize",
     "reach",
+    "fireSound",
+    "reloadSound",
+    "emptySound",
+    "heardWithin",
     "action",
     "arming",
     "spin",
@@ -98,6 +102,11 @@ pub(crate) const HIT_FIELDS: &[&str] = &[
     "explosion",
 ];
 
+/// What the table handed to a `game.onNoise` function holds.
+#[cfg(test)]
+pub(crate) const NOISE_FIELDS: &[&str] =
+    &["sound", "position", "loudness", "heardWithin", "byPlayer"];
+
 /// The longest name a weapon can have, in bytes.
 const LONGEST_NAME: usize = 64;
 
@@ -129,6 +138,64 @@ pub struct HoldSaid {
     pub support: Option<[f32; 3]>,
 }
 
+/// The longest sound name a weapon can use, in bytes.
+pub const LONGEST_SOUND_NAME: usize = 48;
+
+/// The name of a sound, held in the value itself so that a noise that
+/// carries one stays `Copy` and a tick sets no memory aside.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SoundName {
+    len: u8,
+    bytes: [u8; LONGEST_SOUND_NAME],
+}
+
+impl SoundName {
+    /// The name `name`, or `None` when it is empty or longer than
+    /// [`LONGEST_SOUND_NAME`] bytes.
+    #[must_use]
+    pub fn new(name: &str) -> Option<Self> {
+        let len = name.len();
+        if len == 0 || len > LONGEST_SOUND_NAME {
+            return None;
+        }
+        let mut bytes = [0; LONGEST_SOUND_NAME];
+        bytes[..len].copy_from_slice(name.as_bytes());
+        Some(Self {
+            len: len as u8,
+            bytes,
+        })
+    }
+
+    /// The name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        // Only a whole `&str` was ever copied in, so this is valid; an
+        // empty string is the safe answer should it ever not be.
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("")
+    }
+}
+
+impl std::fmt::Debug for SoundName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
+
+/// The sounds a weapon names and how far its shot carries. What it leaves
+/// out is the engine's: `"gunshot"`, `"reload"`, `"dry-fire"` and a shot
+/// heard within [`Range::GUNFIRE`]'s distance, 150 m.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WeaponSounds {
+    /// `fireSound`: played for each shot.
+    pub fire: Option<SoundName>,
+    /// `reloadSound`: played when a reload begins.
+    pub reload: Option<SoundName>,
+    /// `emptySound`: played when the trigger is pulled on an empty magazine.
+    pub empty: Option<SoundName>,
+    /// `heardWithin`: how many metres away a shot can be heard.
+    pub heard_within: Option<f32>,
+}
+
 /// One kind of weapon: its name and its numbers.
 #[derive(Debug, Clone)]
 pub(crate) struct Kind {
@@ -141,6 +208,8 @@ pub(crate) struct Kind {
     pub model: Option<Rc<str>>,
     /// How it is held: in one hand or two, and where the left hand goes.
     pub hold: HoldSaid,
+    /// The sounds it names and how far its shot carries.
+    pub sounds: WeaponSounds,
     /// The line of `main.luau` or a required script that defined it.
     line: Option<usize>,
 }
@@ -269,6 +338,7 @@ fn built_in() -> Vec<Kind> {
             settings,
             model: Some(Rc::from(*name)),
             hold: HoldSaid::default(),
+            sounds: WeaponSounds::default(),
             line: None,
         })
         .collect()
@@ -836,6 +906,8 @@ pub struct HeldWeapon {
     pub model: Option<Rc<str>>,
     /// How the script said it is held, if it said.
     pub hold: HoldSaid,
+    /// The sounds it names and how far its shot carries.
+    pub sounds: WeaponSounds,
     /// Everything this one weapon remembers between ticks.
     pub state: Weapon,
 }
@@ -867,6 +939,35 @@ pub(crate) fn hit_table(lua: &Lua, shared: &Shared, hit: &WeaponHit) -> mlua::Re
     table.raw_set("cover", hit.cover)?;
     table.raw_set("explosion", hit.explosion)?;
     // Every function given to game.onWeaponHit is handed the same table.
+    table.set_readonly(true);
+    Ok(table)
+}
+
+/// A noise the game made, as `game.onNoise` is told of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoiseTold<'a> {
+    /// The name it is played under, before any `game.audio.replace`.
+    pub sound: &'a str,
+    /// Where it was made, in metres.
+    pub position: [f32; 3],
+    /// How loud it was, from 0 up.
+    pub loudness: f32,
+    /// How many metres away it can be heard.
+    pub heard_within: f32,
+    /// Whether the player made it, as against the world.
+    pub by_player: bool,
+}
+
+/// The table a `game.onNoise` function is handed.
+pub(crate) fn noise_table(lua: &Lua, noise: &NoiseTold) -> mlua::Result<Table> {
+    let table = lua.create_table_with_capacity(0, 5)?;
+    table.raw_set("sound", noise.sound)?;
+    let [x, y, z] = noise.position;
+    table.raw_set("position", mlua::Vector::new(x, y, z))?;
+    table.raw_set("loudness", noise.loudness)?;
+    table.raw_set("heardWithin", noise.heard_within)?;
+    table.raw_set("byPlayer", noise.by_player)?;
+    // Every function given to game.onNoise is handed the same table.
     table.set_readonly(true);
     Ok(table)
 }
@@ -931,7 +1032,7 @@ fn weapon_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 format!("A game can have {MOST_KINDS} kinds of weapon, and this is one more."),
             ));
         }
-        let (settings, model, hold) = match &settings {
+        let (settings, model, hold, sounds) = match &settings {
             Value::Table(settings) => read_settings(lua, &shared, name, settings)?,
             // No settings: a copy of the weapon it starts from.
             Value::Nil => read_settings(lua, &shared, name, &lua.create_table()?)?,
@@ -954,6 +1055,7 @@ fn weapon_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             settings,
             model,
             hold,
+            sounds,
             line,
         });
         Ok(())
@@ -1183,27 +1285,28 @@ fn read_settings(
     shared: &Shared,
     name: &str,
     table: &Table,
-) -> mlua::Result<(WeaponSettings, Option<Rc<str>>, HoldSaid)> {
+) -> mlua::Result<(WeaponSettings, Option<Rc<str>>, HoldSaid, WeaponSounds)> {
     // What it starts from: the weapon `from` names; with no `from`, the
     // weapon that already has this name (so a built-in one can be tuned),
     // or else the rifle.
     let from: Value = table.raw_get("from")?;
     // Its model too comes from what it starts from, unless it says one.
-    let (mut settings, mut model, mut hold) = match &from {
+    let (mut settings, mut model, mut hold, mut sounds) = match &from {
         Value::Nil => kind_named(shared, name).map_or_else(
             || {
                 (
                     WeaponSettings::default(),
                     Some(Rc::from("rifle")),
                     HoldSaid::default(),
+                    WeaponSounds::default(),
                 )
             },
-            |kind| (kind.settings, kind.model, kind.hold),
+            |kind| (kind.settings, kind.model, kind.hold, kind.sounds),
         ),
         Value::String(from) => {
             let from = from.to_str()?;
             match kind_named(shared, &from) {
-                Some(kind) => (kind.settings, kind.model, kind.hold),
+                Some(kind) => (kind.settings, kind.model, kind.hold, kind.sounds),
                 None => return Err(no_such_weapon(lua, shared, &from)),
             }
         }
@@ -1369,6 +1472,66 @@ fn read_settings(
                     "ejectAt = vector.create(0.02, 0.05, -0.08)",
                 )?;
             }
+            "fireSound" | "reloadSound" | "emptySound" => {
+                let slot = match key.as_str() {
+                    "fireSound" => &mut sounds.fire,
+                    "reloadSound" => &mut sounds.reload,
+                    _ => &mut sounds.empty,
+                };
+                let named = match &value {
+                    Value::String(name) => name.to_str()?.trim().to_owned(),
+                    other => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "game.weapon: {key} is the name of the sound to play, in \
+                                 quotes, but it was given {}. Write it like this: \
+                                 {key} = \"twang\"",
+                                describe(other)
+                            ),
+                        ));
+                    }
+                };
+                // An empty name goes back to the engine's own sound.
+                *slot = if named.is_empty() {
+                    None
+                } else {
+                    let Some(name) = SoundName::new(&named) else {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "game.weapon: {key} is too long: a sound's name is at most \
+                                 {LONGEST_SOUND_NAME} characters. Write it like this: \
+                                 {key} = \"twang\""
+                            ),
+                        ));
+                    };
+                    Some(name)
+                };
+            }
+            "heardWithin" => {
+                let metres = match &value {
+                    Value::Integer(n) => Some(*n as f32),
+                    Value::Number(n) => Some(*n as f32),
+                    _ => None,
+                };
+                match metres {
+                    Some(metres) if metres.is_finite() && metres > 0.0 => {
+                        sounds.heard_within = Some(metres);
+                    }
+                    _ => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "game.weapon: heardWithin is how many metres away a shot can \
+                                 be heard, a number above 0, but it was given {}. Write it \
+                                 like this: heardWithin = 20",
+                                describe(&value)
+                            ),
+                        ));
+                    }
+                }
+            }
             "reach" => {
                 let mut metres = 500.0;
                 set_plain(lua, &mut metres, Slot::Number(|m| m), "reach", &value)?;
@@ -1467,7 +1630,7 @@ fn read_settings(
              Write it like this: roundsPerMinute = 600",
         ));
     }
-    Ok((settings, model, hold))
+    Ok((settings, model, hold, sounds))
 }
 
 #[cfg(test)]
@@ -1484,6 +1647,10 @@ mod tests {
             "fireMode",
             "burstSize",
             "reach",
+            "fireSound",
+            "reloadSound",
+            "emptySound",
+            "heardWithin",
             "action",
             "arming",
             "spin",

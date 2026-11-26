@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use lore_input::{
-    ActionId, ActionKind, ActionMap, Binding, Button, Device, GamepadStyle, InputFrame, MapError,
+    ActionId, ActionKind, ActionMap, Binding, Device, GamepadStyle, InputFrame, MapError, MouseMode,
 };
 use lore_ui::{EstimatedText, TextMeasure};
 use mlua::{Function, Lua, MultiValue, Table, Value};
@@ -120,6 +120,12 @@ pub struct MoveSaid {
     pub dodge_seconds: f32,
     /// How far a dodge carries the player, in metres.
     pub dodge_distance: f32,
+    /// Metres between footsteps when walking. Sprinting and crouching
+    /// steps are spaced in the same proportion as the engine's own.
+    pub stride: f32,
+    /// What every step and landing is multiplied by in loudness: 1 is the
+    /// engine's own, 0 is silent.
+    pub step_loudness: f32,
 }
 
 /// What the player can do besides walk, jump and crouch: each is off
@@ -277,6 +283,10 @@ impl Default for MoveSaid {
             ladder_speed: 2.2,
             dodge_seconds: 0.35,
             dodge_distance: 3.2,
+            // The same as `lore_audio::FootstepSettings::default().walk_stride`,
+            // which a test in the `lore` crate holds it to.
+            stride: 2.0,
+            step_loudness: 1.0,
         }
     }
 }
@@ -295,6 +305,8 @@ pub(crate) enum MoveNumber {
     Ladder,
     DodgeSeconds,
     DodgeDistance,
+    Stride,
+    StepLoudness,
 }
 
 impl MoveNumber {
@@ -369,6 +381,18 @@ impl MoveNumber {
                 "how far a dodge carries the player, in metres",
                 (0.2, 30.0),
             ),
+            Self::Stride => (
+                "setStride",
+                "game.player:setStride(1.5)",
+                "how many metres the player goes between footsteps when walking",
+                (0.1, 20.0),
+            ),
+            Self::StepLoudness => (
+                "setStepLoudness",
+                "game.player:setStepLoudness(0.5)",
+                "how loud every step and landing is: 1 as now, 0 silent, 2 twice as loud",
+                (0.0, 4.0),
+            ),
         }
     }
 
@@ -386,6 +410,8 @@ impl MoveNumber {
             Self::Ladder => said.ladder_speed,
             Self::DodgeSeconds => said.dodge_seconds,
             Self::DodgeDistance => said.dodge_distance,
+            Self::Stride => said.stride,
+            Self::StepLoudness => said.step_loudness,
         }
     }
 }
@@ -418,6 +444,8 @@ pub(crate) fn set_move(
         MoveNumber::Ladder => said.ladder_speed = number,
         MoveNumber::DodgeSeconds => said.dodge_seconds = number,
         MoveNumber::DodgeDistance => said.dodge_distance = number,
+        MoveNumber::Stride => said.stride = number,
+        MoveNumber::StepLoudness => said.step_loudness = number,
     }
     shared.tools.moves.set(said);
     Ok(())
@@ -680,6 +708,11 @@ impl Tools {
         self.steps.borrow_mut().advance(map, input, rate, speed);
     }
 
+    /// Reads the player's controls as now in force, if the engine has said.
+    pub fn with_controls<R>(&self, read: impl FnOnce(Option<&ActionMap>) -> R) -> R {
+        read(self.controls.borrow().as_ref())
+    }
+
     pub fn set_controls(&self, controls: &ActionMap) {
         *self.controls.borrow_mut() = Some(controls.clone());
     }
@@ -737,7 +770,7 @@ impl Tools {
         let map = controls.as_ref().unwrap_or(own);
         map.action(name).map_or_else(
             |_| String::new(),
-            |action| label_of(map, action, self.device.get(), self.style.get()),
+            |action| map.label(action, self.device.get(), self.style.get()),
         )
     }
 
@@ -959,40 +992,60 @@ pub(crate) fn frames(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     Ok(table)
 }
 
-/// What a binding is called on a button, for showing the player.
-fn describe_binding(binding: Binding, style: GamepadStyle) -> String {
-    let label = |button: Button| button.label(style);
-    match binding {
-        Binding::Button(button) => label(button).to_owned(),
-        Binding::Axis { negative, positive } => {
-            format!("{} / {}", label(negative), label(positive))
-        }
-        Binding::Directions {
-            up,
-            down,
-            left,
-            right,
-        } => format!(
-            "{} {} {} {}",
-            label(up),
-            label(left),
-            label(down),
-            label(right)
-        ),
-        other => other.to_string(),
-    }
+/// The fields of the table `game.input.onControlsChanged` is handed.
+#[cfg(test)]
+pub(crate) const CONTROLS_CHANGE_FIELDS: &[&str] =
+    &["message", "changes", "problem", "file", "line"];
+
+/// The fields of one of its `changes`.
+#[cfg(test)]
+pub(crate) const BINDING_CHANGE_FIELDS: &[&str] = &["action", "before", "after"];
+
+/// One action whose bindings the player's file changed, as the player reads
+/// them: the printed names of the buttons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingChange {
+    /// The action's name, as the script knows it.
+    pub action: String,
+    /// What it was bound to.
+    pub before: String,
+    /// What it is bound to now.
+    pub after: String,
 }
 
-/// What to show for `action` on the device the player uses, then on the other.
-fn label_of(map: &ActionMap, action: ActionId, device: Device, style: GamepadStyle) -> String {
-    let wants_gamepad = device == Device::Gamepad;
-    let bindings = map.bindings(action);
-    for gamepad in [wants_gamepad, !wants_gamepad] {
-        if let Some(binding) = bindings.iter().find(|b| b.is_gamepad() == gamepad) {
-            return describe_binding(*binding, style);
-        }
+/// What reading the player's bindings file again came to, as
+/// `game.input.onControlsChanged` hears of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlsChange {
+    /// Exactly what the engine's own notice says.
+    pub message: String,
+    /// The actions whose bindings changed. Empty when none did.
+    pub changes: Vec<BindingChange>,
+    /// What is wrong with the file, or `None` when it was good.
+    pub problem: Option<String>,
+    /// The file, with enough of its path to tell the player's from the game's.
+    pub file: String,
+    /// The line of the problem, when it has one.
+    pub line: Option<usize>,
+}
+
+/// The table `game.input.onControlsChanged` functions are handed.
+pub(crate) fn controls_table(lua: &Lua, change: &ControlsChange) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    table.set("message", change.message.as_str())?;
+    let changes = lua.create_table_with_capacity(change.changes.len(), 0)?;
+    for one in &change.changes {
+        let entry = lua.create_table_with_capacity(0, 3)?;
+        entry.set("action", one.action.as_str())?;
+        entry.set("before", one.before.as_str())?;
+        entry.set("after", one.after.as_str())?;
+        changes.raw_push(entry)?;
     }
-    String::new()
+    table.set("changes", changes)?;
+    table.set("problem", change.problem.as_deref())?;
+    table.set("file", change.file.as_str())?;
+    table.set("line", change.line)?;
+    Ok(table)
 }
 
 /// The names of the actions a game made for itself are written like the
@@ -1033,22 +1086,10 @@ fn fixed_name(name: &str) -> String {
 /// The engine's action for switching between first and third person.
 pub(crate) const SWITCH_VIEW: &str = "switch_view";
 
-/// A gamepad button not yet used by any action, to suggest for one that
-/// has none.
-fn free_gamepad_button(map: &ActionMap) -> &'static str {
-    const CANDIDATES: [&str; 2] = ["LeftBumper", "GamepadSelect"];
-    let used = |name: &str| {
-        let Ok(wanted) = name.parse::<Binding>() else {
-            return false;
-        };
-        map.actions()
-            .any(|action| map.bindings(action).contains(&wanted))
-    };
-    CANDIDATES
-        .into_iter()
-        .find(|name| !used(name))
-        .unwrap_or(CANDIDATES[0])
-}
+/// The gamepad button to suggest for an action that has none. Every button
+/// is in the standard map; this is the one the engine leaves for games
+/// (`GamepadSelect` is `switch_view`).
+const FREE_GAMEPAD_BUTTON: &str = "LeftBumper";
 
 /// Checks what a script gave `game.input.bind` as bindings: buttons, spelt
 /// right.
@@ -1069,11 +1110,245 @@ fn check_bindings(name: &str, bindings: &[String]) -> Result<(), MapError> {
     Ok(())
 }
 
-/// `game.input.bind(name, bindings)`.
+/// The sets of a map, written for an error: `"gameplay", "menu"`.
+pub(crate) fn set_names(map: &ActionMap) -> String {
+    let names: Vec<String> = map
+        .sets()
+        .map(|set| format!("\"{}\"", map.set_name(set)))
+        .collect();
+    names.join(", ")
+}
+
+/// The sets the engine owns, which a game cannot name for its own.
+const ENGINE_SETS: [&str; 2] = ["gameplay", "menu"];
+
+/// The set the editor adds while a level is edited: not in a game's map, but
+/// a game's own set by this name would stop the editor.
+const EDITOR_SET: &str = "editor";
+
+/// The set a script named in `{ set = "riding" }`, or the error that says
+/// which sets there are and how to make one.
+fn find_set(
+    lua: &Lua,
+    map: &ActionMap,
+    function: &str,
+    value: &Value,
+) -> mlua::Result<lore_input::ActionSetId> {
+    let Value::String(name) = value else {
+        return Err(fail(
+            lua,
+            format!(
+                "game.input.{function} needs the name of an action set in quotes, but it was \
+                 given {}. The sets are {}. Make one of your own at the top of the file with \
+                 game.input.addSet(\"riding\").",
+                describe(value),
+                set_names(map)
+            ),
+        ));
+    };
+    let name = name.to_str()?;
+    map.set(&name).map_err(|unknown| {
+        fail(
+            lua,
+            format!(
+                "game.input.{function}: {unknown} The sets are {}. To make one of your own, \
+                 write game.input.addSet(\"{name}\") above this line.",
+                set_names(map)
+            ),
+        )
+    })
+}
+
+/// `game.input.addSet(name, { mouse = "look" })`.
+fn add_set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    const EXAMPLE: &str = "game.input.addSet(\"riding\")";
+    let shared = Rc::clone(shared);
+    lua.create_function(move |lua, (name, options): (Value, Value)| {
+        if !shared.loading.get() {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.input.addSet makes a set of actions for the whole game, so it belongs \
+                     at the top of the file, outside any function: {EXAMPLE}. Then switch to it \
+                     in a function with game.input.useSet(\"riding\")."
+                ),
+            ));
+        }
+        let Value::String(name) = &name else {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.input.addSet needs a name for the set in quotes, but it was given \
+                     {}. Write it like this: {EXAMPLE}",
+                    describe(&name)
+                ),
+            ));
+        };
+        let name = name.to_string_lossy();
+        if let Some(problem) = name_problem(&name) {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.input.addSet was given the name \"{name}\", but {problem}. Write it \
+                     like this: game.input.addSet(\"{}\")",
+                    fixed_name(&name)
+                ),
+            ));
+        }
+        let mouse = match &options {
+            Value::Nil => MouseMode::Look,
+            Value::Table(table) => set_options(lua, table)?,
+            other => {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.input.addSet takes its options in a table, but it was given {}. \
+                         Write it like this: game.input.addSet(\"{name}\", {{ mouse = \
+                         \"pointer\" }})",
+                        describe(other)
+                    ),
+                ));
+            }
+        };
+        let mut map = shared.actions.borrow_mut();
+        if name == EDITOR_SET {
+            return Err(fail(
+                lua,
+                format!(
+                    "\"{name}\" is the name of the set the editor uses, so game.input.addSet \
+                     cannot make it. Give yours a name of its own: {EXAMPLE}"
+                ),
+            ));
+        }
+        if ENGINE_SETS.contains(&name.as_str()) || map.set(&name).is_ok() {
+            return Err(fail(
+                lua,
+                format!(
+                    "\"{name}\" is already an action set ({}), so game.input.addSet cannot \
+                     make it. Give yours a name of its own: {EXAMPLE}",
+                    set_names(&map)
+                ),
+            ));
+        }
+        if let Err(problem) = map.add_set(&name, mouse) {
+            return Err(fail(lua, format!("game.input.addSet: {problem}")));
+        }
+        shared.clock.note(&name);
+        Ok(())
+    })
+}
+
+/// What the mouse is for, from the options table of `game.input.addSet`.
+fn set_options(lua: &Lua, table: &Table) -> mlua::Result<MouseMode> {
+    let mut mouse = MouseMode::Look;
+    for pair in table.pairs::<Value, Value>() {
+        let (key, value) = pair?;
+        let Value::String(key) = &key else {
+            return Err(fail(
+                lua,
+                "game.input.addSet options are named, like { mouse = \"pointer\" }.".to_owned(),
+            ));
+        };
+        if key.to_str()? != "mouse" {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.input.addSet has no option called \"{}\". The only one is mouse, \
+                     which says what the mouse is for while the set is live: {{ mouse = \
+                     \"look\" }} to look around or {{ mouse = \"pointer\" }} to point at a menu.",
+                    key.to_string_lossy()
+                ),
+            ));
+        }
+        mouse = match &value {
+            Value::String(word) if word.to_str()? == "look" => MouseMode::Look,
+            Value::String(word) if word.to_str()? == "pointer" => MouseMode::Pointer,
+            other => {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.input.addSet needs mouse to be \"look\" or \"pointer\", but it \
+                         was {}. Write {{ mouse = \"pointer\" }} for a menu the mouse points at.",
+                        describe(other)
+                    ),
+                ));
+            }
+        };
+    }
+    Ok(mouse)
+}
+
+/// The set named in the options of `game.input.bind`, if any.
+fn bind_set(
+    lua: &Lua,
+    map: &ActionMap,
+    options: &Value,
+) -> mlua::Result<Option<lore_input::ActionSetId>> {
+    let table = match options {
+        Value::Nil => return Ok(None),
+        Value::Table(table) => table,
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.input.bind takes its options in a table, but it was given {}. Write \
+                     it like this: game.input.bind(\"gallop\", {{ \"H\", \"LeftBumper\" }}, \
+                     {{ set = \"riding\" }})",
+                    describe(other)
+                ),
+            ));
+        }
+    };
+    let mut chosen = None;
+    for pair in table.pairs::<Value, Value>() {
+        let (key, value) = pair?;
+        match &key {
+            Value::String(key) if key.to_str()? == "set" => {
+                chosen = Some(find_set(lua, map, "bind", &value)?);
+            }
+            other => {
+                let shown = match other {
+                    Value::String(text) => text.to_string_lossy(),
+                    other => describe(other).to_owned(),
+                };
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.input.bind has no option called \"{shown}\". The only one is \
+                         set, the action set that hears it: {{ set = \"riding\" }}."
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(chosen)
+}
+
+/// Whether a game's buttons cover a keyboard or mouse and a gamepad: every
+/// action must, so that nothing ships for one device only. Gives the mistake
+/// to put right.
+fn device_gap(name: &str, bindings: &[String]) -> Option<String> {
+    let parsed: Vec<Binding> = bindings.iter().filter_map(|b| b.parse().ok()).collect();
+    if !parsed.iter().any(|binding| binding.is_gamepad()) {
+        return Some(format!(
+            "game.input.bind(\"{name}\", ...) needs a gamepad button too, so a player with a \
+             controller can use it. Add one such as \"{FREE_GAMEPAD_BUTTON}\".",
+        ));
+    }
+    if !parsed.iter().any(|binding| !binding.is_gamepad()) {
+        return Some(format!(
+            "game.input.bind(\"{name}\", ...) needs a keyboard or mouse button too, so a \
+             player without a controller can use it. Add one such as \"F1\" or \"MouseMiddle\"."
+        ));
+    }
+    None
+}
+
+/// `game.input.bind(name, bindings, options)`.
 fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     const EXAMPLE: &str = "game.input.bind(\"open_map\", { \"F1\", \"LeftBumper\" })";
     let shared = Rc::clone(shared);
-    lua.create_function(move |lua, (name, list): (Value, Value)| {
+    lua.create_function(move |lua, (name, list, options): (Value, Value, Value)| {
         if !shared.loading.get() {
             return Err(fail(
                 lua,
@@ -1117,67 +1392,51 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             return Err(fail(
                 lua,
                 format!(
-                    "game.input.bind was given \"{name}\" twice. Put all of its buttons in one \
-                     list: game.input.bind(\"{name}\", {{ \"F1\", \"LeftBumper\" }})"
+                    "game.input.bind(\"{name}\") is written twice. Bind each action once; to \
+                     change its buttons, edit the first one."
                 ),
             ));
         }
         let mut map = shared.actions.borrow_mut();
-        match map.action(&name) {
-            Ok(id) if !map.is_own(id) => {
+        if let Ok(id) = map.action(&name)
+            && !map.is_own(id)
+        {
+            return Err(fail(
+                lua,
+                format!(
+                    "\"{name}\" is already one of the engine's actions, so game.input.bind \
+                     cannot make it. To read it, write: game.input.pressed(\"{name}\"). \
+                     To make an action of your own, give it a name of its own: {EXAMPLE}"
+                ),
+            ));
+        }
+        let set = bind_set(lua, &map, &options)?;
+        if let Some(gap) = device_gap(&name, &bindings) {
+            return Err(fail(lua, gap));
+        }
+        if map.action(&name).is_err() {
+            let made = match set {
+                Some(set) => map.own_button_in(&name, &bindings, set),
+                None => map.own_button(&name, &bindings),
+            };
+            if let Err(problem) = made {
                 return Err(fail(
                     lua,
-                    format!(
-                        "\"{name}\" is already one of the engine's actions, so game.input.bind \
-                         cannot make it. To read it, write: game.input.pressed(\"{name}\"). \
-                         To make an action of your own, give it a name of its own: {EXAMPLE}"
-                    ),
+                    format!("game.input.bind: {problem} Write it like this: {EXAMPLE}"),
                 ));
             }
-            // The player's own bindings for it stay.
-            Ok(id) => {
-                if shared.reloading && !same_buttons(map.bindings(id), &bindings) {
-                    log::info!(
-                        "game.input.bind(\"{name}\") was given different buttons than the \
-                         action has now. The player's bindings (or the buttons first bound) \
-                         stay until the game is started again."
-                    );
-                }
+            shared.clock.note(&name);
+            if let Some(set) = set {
+                shared.clock.note(map.set_name(set));
             }
-            Err(_) => {
-                let id = match map.own_button(&name, &bindings) {
-                    Ok(id) => id,
-                    Err(problem) => {
-                        return Err(fail(
-                            lua,
-                            format!("game.input.bind: {problem} Write it like this: {EXAMPLE}"),
-                        ));
-                    }
-                };
-                shared.clock.note(&name);
-                if shared.reloading || shared.tools.was_handed_out() {
-                    log::warn!(
-                        "game.input.bind(\"{name}\") is a new action, added since the game \
-                         started: the running game will not hear it until the game is started \
-                         again."
-                    );
-                }
-                if !map.bindings(id).iter().any(|binding| binding.is_gamepad()) {
-                    log::warn!(
-                        "The action \"{name}\" has no gamepad button, so a player with a \
-                         gamepad cannot use it. Add one, for example \"{}\".",
-                        free_gamepad_button(&map)
-                    );
-                }
-                // `switch_view` only does anything in a game that lets the
-                // player switch views; that game is warned when it does.
-                for clash in map.conflicts().iter().filter(|clash| {
-                    (clash.first == name || clash.second == name)
-                        && clash.first != SWITCH_VIEW
-                        && clash.second != SWITCH_VIEW
-                }) {
-                    log::warn!("{clash}");
-                }
+            // `switch_view` only does anything in a game that lets the
+            // player switch views; that game is warned when it does.
+            for clash in map.conflicts().iter().filter(|clash| {
+                (clash.first == name || clash.second == name)
+                    && clash.first != SWITCH_VIEW
+                    && clash.second != SWITCH_VIEW
+            }) {
+                log::warn!("{clash}");
             }
         }
         shared.bound.borrow_mut().push(name);
@@ -1225,15 +1484,6 @@ fn bindings_of(lua: &Lua, list: &Value, example: &str) -> mlua::Result<Vec<Strin
     Ok(names)
 }
 
-/// Whether `written` names the same buttons as `bound`, in any order.
-fn same_buttons(bound: &[Binding], written: &[String]) -> bool {
-    let parsed: Vec<Binding> = written
-        .iter()
-        .filter_map(|name| name.parse().ok())
-        .collect();
-    parsed.len() == bound.len() && parsed.iter().all(|binding| bound.contains(binding))
-}
-
 /// The id and place in the map of the action a script named, or the error
 /// that says what the actions are.
 fn find(
@@ -1265,6 +1515,82 @@ fn find(
 /// Puts `bind`, `pointer`, `wheel`, `stepped` and `label` on `game.input`.
 pub(crate) fn install_input(lua: &Lua, shared: &Rc<Shared>, input: &Table) -> mlua::Result<()> {
     input.set("bind", bind(lua, shared)?)?;
+    let list: fn(&mut crate::api::Handlers) -> &mut Vec<Function> =
+        |handlers| &mut handlers.controls_changed;
+    input.set(
+        "onControlsChanged",
+        crate::api::on_event(
+            lua,
+            shared,
+            "input.onControlsChanged",
+            "game.input.onControlsChanged(function(change) ... end)",
+            list,
+        )?,
+    )?;
+    let notice = Rc::clone(shared);
+    input.set(
+        "showControlsNotice",
+        lua.create_function(move |lua, value: Value| match value {
+            Value::Boolean(shown) => {
+                notice.controls_notice.set(shown);
+                Ok(())
+            }
+            other => Err(fail(
+                lua,
+                format!(
+                    "game.input.showControlsNotice needs true or false, but it was given {}. \
+                     Write it like this: game.input.showControlsNotice(false)",
+                    describe(&other)
+                ),
+            )),
+        })?,
+    )?;
+    input.set("addSet", add_set(lua, shared)?)?;
+
+    let rules = Rc::clone(shared);
+    input.set(
+        "sets",
+        lua.create_function(move |lua, ()| {
+            let map = rules.actions.borrow();
+            lua.create_sequence_from(map.sets().map(|set| map.set_name(set).to_owned()))
+        })?,
+    )?;
+
+    let rules = Rc::clone(shared);
+    input.set(
+        "actions",
+        lua.create_function(move |lua, set: Value| {
+            let map = rules.actions.borrow();
+            let only = match &set {
+                Value::Nil => None,
+                other => Some(find_set(lua, &map, "actions", other)?),
+            };
+            lua.create_sequence_from(
+                map.actions()
+                    .filter(|action| only.is_none_or(|set| map.is_heard_in(*action, set)))
+                    .map(|action| map.name(action).to_owned()),
+            )
+        })?,
+    )?;
+
+    let rules = Rc::clone(shared);
+    input.set(
+        "bindings",
+        lua.create_function(move |lua, value: Value| {
+            let own = rules.actions.borrow();
+            let (id, _) = find(lua, &own, "bindings", &value)?;
+            // The player's own file may have changed them: ask what is in force.
+            let names: Vec<String> = rules.tools.with_controls(|controls| {
+                let in_force =
+                    controls.and_then(|map| map.action(own.name(id)).ok().map(|id| (map, id)));
+                match in_force {
+                    Some((map, id)) => map.bindings(id).iter().map(ToString::to_string).collect(),
+                    None => own.bindings(id).iter().map(ToString::to_string).collect(),
+                }
+            });
+            lua.create_sequence_from(names)
+        })?,
+    )?;
 
     let rules = Rc::clone(shared);
     input.set(
@@ -1327,7 +1653,7 @@ pub(crate) fn install_input(lua: &Lua, shared: &Rc<Shared>, input: &Table) -> ml
                 }
             };
             let (id, _) = find(lua, map, "label", &value)?;
-            Ok(label_of(map, id, tools.device.get(), tools.style.get()))
+            Ok(map.label(id, tools.device.get(), tools.style.get()))
         })?,
     )?;
     Ok(())

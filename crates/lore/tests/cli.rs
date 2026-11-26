@@ -787,10 +787,12 @@ end)
 }
 
 #[test]
-fn controls_given_a_game_lists_its_own_actions_after_the_engines_and_writes_them_in_the_file() {
+fn controls_given_a_game_lists_its_own_actions_after_the_engines_and_writes_a_file_for_the_game() {
     let folder = scratch("controls-own-action");
     fs::write(folder.join("main.luau"), OWN_ACTION).unwrap();
     let file = folder.join("bindings.toml");
+    let id = lore::controls::game_id(&folder.file_name().unwrap().to_string_lossy()).unwrap();
+    let game_file = folder.join("games").join(id).join("bindings.toml");
 
     let output = lore(&folder, &["controls", "."]);
 
@@ -799,22 +801,83 @@ fn controls_given_a_game_lists_its_own_actions_after_the_engines_and_writes_them
     assert!(said.starts_with("Your controls:\n"), "{said}");
     let own = said.find("The game's own actions").expect(&said);
     assert!(said.find("  jump  ").unwrap() < own, "{said}");
-    assert!(said.contains("[game_bindings]"), "{said}");
     assert!(
         said[own..].contains("\n  weather_menu       F1, GamepadSelect\n"),
         "{said}"
     );
     assert!(!said[..own].contains("weather_menu"), "{said}");
-    let written = fs::read_to_string(&file).unwrap();
+    assert!(
+        said.contains(&format!(
+            "\nThey are kept in {}, made just now.",
+            file.display()
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "\nThis game's own file, which wins over that one for this game, is {}, made just now.",
+            game_file.display()
+        )),
+        "{said}"
+    );
+    // The player-wide file has the engine's actions only; the game's has its own.
+    assert!(!fs::read_to_string(&file).unwrap().contains("weather_menu"));
+    let written = fs::read_to_string(&game_file).unwrap();
     assert!(written.contains("[game_bindings]"), "{written}");
     assert!(
         written.contains("# weather_menu = [\"F1\", \"GamepadSelect\"]"),
         "{written}"
     );
 
+    // Each file's changes are told apart, and a file already there is not made again.
+    fs::write(&file, "[bindings]\nreload = [\"G\", \"GamepadWest\"]\n").unwrap();
+    fs::write(
+        &game_file,
+        "[game_bindings]\nweather_menu = [\"F5\", \"GamepadSelect\"]\n[bindings]\njump = [\"J\", \"GamepadSouth\"]\n",
+    )
+    .unwrap();
+    let said = stdout(&lore(&folder, &["controls", "."]));
+    assert!(said.contains("  reload  "), "{said}");
+    let line = |name: &str| {
+        said.lines()
+            .find(|l| l.trim_start().starts_with(name))
+            .unwrap()
+            .to_owned()
+    };
+    assert!(
+        line("reload").ends_with("G, GamepadWest  (changed in your file)"),
+        "{said}"
+    );
+    assert!(
+        line("jump").ends_with("J, GamepadSouth  (changed in this game's file)"),
+        "{said}"
+    );
+    assert!(
+        line("weather_menu").ends_with("F5, GamepadSelect  (changed in this game's file)"),
+        "{said}"
+    );
+    assert!(!said.contains("made just now"), "{said}");
+
     // Without a game, only the engine's own are listed.
     let output = lore(&folder, &["controls"]);
     assert!(!stdout(&output).contains("weather_menu"));
+    assert!(!stdout(&output).contains("This game's own file"));
+}
+
+#[test]
+fn controls_given_a_game_with_no_actions_of_its_own_writes_no_file_for_it() {
+    let folder = scratch("controls-no-own-action");
+    fs::write(folder.join("main.luau"), "-- nothing\n").unwrap();
+
+    let output = lore(&folder, &["controls", "."]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains("which is not made because the game has no actions"),
+        "{said}"
+    );
+    assert!(!folder.join("games").exists());
 }
 
 #[test]
@@ -838,14 +901,14 @@ fn check_passes_a_new_game_without_a_window() {
     );
     // The level `lore new` made was loaded too.
     assert!(
-        stdout(&output).contains("level.glb is fine: it loaded with 22 shapes placed"),
+        stdout(&output).contains("level.glb is fine: it loaded with 49 shapes placed"),
         "{}",
         stdout(&output)
     );
-    // And a player was stood at each place the level has to start from.
+    // And a player was stood at the one place the level starts from.
     assert!(
         stdout(&output)
-            .contains("The player can walk it: started at each of its 6 spawn points, they landed"),
+            .contains("The player can walk it: started at its one spawn point, they landed"),
         "{}",
         stdout(&output)
     );

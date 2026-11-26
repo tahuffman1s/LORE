@@ -16,6 +16,7 @@ use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::controls;
+use crate::controls_notice::{self, ControlsNotice};
 use crate::game::{Frame, Game, View};
 use crate::gamepad::Gamepads;
 use crate::pace::{FramePacer, WATCH};
@@ -216,6 +217,11 @@ pub struct Config {
     /// };
     /// ```
     pub controls_file: Option<std::path::PathBuf>,
+    /// The game's own bindings file, read after the player's and winning
+    /// over it, and watched the same way
+    /// ([`controls::game_file`](crate::controls::game_file) says where it
+    /// is kept). Only used with `controls_file`. `None` reads no such file.
+    pub game_controls_file: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -233,6 +239,7 @@ impl Default for Config {
             settings: Settings::default(),
             settings_file: None,
             controls_file: None,
+            game_controls_file: None,
             level_folder: None,
         }
     }
@@ -303,29 +310,39 @@ impl std::error::Error for AppError {
 /// or no graphics card here can draw with Vulkan 1.3. The error's message says
 /// what to do about it.
 pub fn run(mut config: Config, game: impl Game) -> Result<(), AppError> {
-    let controls = config.controls_file.take().map(|file| {
-        let (live, said) = controls::Live::start(file, &mut config.actions);
+    let controls = watch_controls(&mut config);
+    start(config, game, controls, false)
+}
+
+/// Reads the player's bindings file and the game's onto `config.actions`
+/// and starts watching both, as the config says.
+fn watch_controls(config: &mut Config) -> Option<controls::Live> {
+    let game_file = config.game_controls_file.take();
+    config.controls_file.take().map(|file| {
+        let (live, said) = controls::Live::start(file, game_file, &mut config.actions);
         for problem in said {
             log::warn!("{problem}");
         }
         live
-    });
-    start(config, game, controls, false)
+    })
 }
 
 /// Runs `game` as [`run`] does, as the editor: a ground grid is drawn over
 /// the level, and holding the right mouse button captures the mouse to look
 /// around with, whatever the live action set does with it.
 #[cfg(feature = "editor")]
-pub(crate) fn run_editor(config: Config, game: impl Game) -> Result<(), AppError> {
-    start(config, game, None, true)
+pub(crate) fn run_editor(mut config: Config, game: impl Game) -> Result<(), AppError> {
+    // `config.actions` are the editor's, with the game's: the files are
+    // read onto both, and the editor takes the result from its frame.
+    let controls = watch_controls(&mut config);
+    start(config, game, controls, true)
 }
 
 /// Opens the window and runs `game` in it, as the editor if `editing`.
 fn start(
     mut config: Config,
     game: impl Game,
-    controls: Option<controls::Live>,
+    mut controls: Option<controls::Live>,
     editing: bool,
 ) -> Result<(), AppError> {
     for gap in config.actions.parity_gaps() {
@@ -345,7 +362,19 @@ fn start(
         .level_folder
         .take()
         .map(|folder| crate::level::LevelFile::watch(&folder));
+    let mut controls_notice = ControlsNotice::default();
+    let mut controls_change = None;
+    let at_start = controls
+        .as_mut()
+        .map(|live| (live.take_start_problems(), live.file()));
+    if let Some((problems, file)) = at_start.filter(|(problems, _)| !problems.is_empty()) {
+        let change = controls_notice::change_told(Vec::new(), &problems, true, &file);
+        controls_notice.read(None, change.problem.clone(), Instant::now());
+        controls_change = Some(change);
+    }
     let mut app = App {
+        controls_notice,
+        controls_change,
         level_file,
         level_problem: None,
         clock: TickClock::new(config.tick_rate),
@@ -424,11 +453,16 @@ struct App<G> {
     /// What the strength of every rumble is multiplied by: the player's
     /// setting, which no game gets round.
     rumble_share: f32,
-    /// The player's bindings file, watched for saves.
+    /// The player's bindings file and the game's, watched for saves.
     controls: Option<controls::Live>,
     /// Controls read from that file since the last frame, for the game to
     /// hear of.
     new_controls: Option<ActionMap>,
+    /// What the player is told when the files are read again.
+    controls_notice: ControlsNotice,
+    /// What the last reading came to, for the game to hear of in the next
+    /// frame.
+    controls_change: Option<lore_script::ControlsChange>,
     /// The size the HUD and menus are drawn at, which is also what turns
     /// the pointer's pixels into HUD units. It is the player's setting,
     /// but not while the mouse is held down: see [`App::follow_ui_size`].
@@ -885,8 +919,8 @@ impl<G: Game> App<G> {
         !self.occluded && Instant::now() >= self.draw_after
     }
 
-    /// Puts the player's bindings file into effect if it was saved since
-    /// it was last read.
+    /// Puts the player's bindings files into effect if one was saved since
+    /// they were last read.
     fn follow_controls(&mut self) {
         let Some(reread) = self.controls.as_mut().and_then(controls::Live::changed) else {
             return;
@@ -894,20 +928,72 @@ impl<G: Game> App<G> {
         for problem in &reread.said {
             log::warn!("{problem}");
         }
-        let Some(mut controls) = reread.controls else {
-            return;
+        let file = self
+            .controls
+            .as_ref()
+            .map(controls::Live::file)
+            .unwrap_or_default();
+        let told = match reread.controls {
+            Some(controls) => {
+                let changes = controls_notice::changes(
+                    self.input.map(),
+                    &controls,
+                    self.input.last_device(),
+                    self.gamepads.style(),
+                );
+                self.input
+                    .set_bindings(self.keep_settings(controls.clone()));
+                self.new_controls = Some(controls);
+                log::info!("Your controls were saved, so they were read again and are in use.");
+                let told = controls_notice::change_told(changes, &reread.problems, false, &file);
+                // The controls were used, so the notice says what changed, and
+                // any part of the file that was not used stays on show.
+                let good = controls_notice::good_message(&told.changes);
+                self.controls_notice
+                    .read(Some(good), told.problem.clone(), Instant::now());
+                told
+            }
+            None => {
+                let told = controls_notice::change_told(Vec::new(), &reread.problems, false, &file);
+                self.controls_notice
+                    .read(None, told.problem.clone(), Instant::now());
+                told
+            }
         };
+        self.controls_change = Some(told);
+    }
+
+    /// `controls` with the player's own settings kept: how fast the view
+    /// turns is theirs, not the file's. Warns of an action a gamepad
+    /// cannot press.
+    fn keep_settings(&self, mut controls: ActionMap) -> ActionMap {
         for gap in controls.parity_gaps() {
             log::warn!("{gap}");
         }
-        // How fast the view turns is the player's setting, not the file's.
         if let Some(look) = self.look {
             let now = self.input.map();
             controls.set_sensitivities(look, now.sensitivity(look), now.stick_sensitivity(look));
         }
-        self.input.set_bindings(controls.clone());
+        controls
+    }
+
+    /// Puts into use the actions a game changed while it runs: `own` is its
+    /// map, the player's bindings files are read onto it again, and the input
+    /// takes the result.
+    fn follow_game_actions(&mut self, own: ActionMap) {
+        let controls = match self.controls.as_mut() {
+            Some(live) => {
+                let (controls, said) = live.rebase(own);
+                for problem in said {
+                    log::warn!("{problem}");
+                }
+                controls
+            }
+            None => own,
+        };
+        let controls = self.keep_settings(controls);
+        self.input.set_map(controls.clone());
         self.new_controls = Some(controls);
-        log::info!("Your controls were saved, so they were read again and are in use.");
     }
 
     /// Tells the input where the free pointer is, in the HUD's own units,
@@ -987,6 +1073,7 @@ impl<G: Game> App<G> {
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())
             .with_controls(self.new_controls.take())
+            .with_controls_change(self.controls_change.take())
             .with_settings(self.config.settings);
         frame.set_ui_scale(self.ui_scale);
         #[cfg(feature = "editor")]
@@ -995,6 +1082,7 @@ impl<G: Game> App<G> {
             frame = frame.with_panels(panels.context.clone(), input);
         }
         self.game.frame(&mut frame);
+        self.controls_notice.show(&mut frame, Instant::now());
         #[cfg(feature = "editor")]
         if let Some(output) = frame.take_panels() {
             self.show_panels(output);
@@ -1201,6 +1289,9 @@ impl<G: Game> App<G> {
         }
         (self.settings_file).save_when_settled(&self.config.settings, now);
         self.sound.handle(frame.take_sounds());
+        if let Some(own) = frame.take_new_actions() {
+            self.follow_game_actions(own);
+        }
         if let Some(set) = frame.action_set() {
             self.use_action_set(set);
         }

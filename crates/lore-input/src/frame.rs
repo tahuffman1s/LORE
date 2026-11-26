@@ -47,6 +47,10 @@ pub struct InputFrame {
     pub typed_keys: Vec<TypedKey>,
     /// The device the player last used on purpose, as of this tick.
     pub device: Device,
+    /// The [`ActionMap::layout`](crate::ActionMap::layout) of the map the frame was made from, so that
+    /// a frame is never read with a map whose ids differ. 0 for a frame made
+    /// without one.
+    pub layout: u64,
     pub(crate) actions: Vec<ActionState>,
 }
 
@@ -69,6 +73,7 @@ impl Clone for InputFrame {
             typed: self.typed.clone(),
             typed_keys: self.typed_keys.clone(),
             device: self.device,
+            layout: self.layout,
             actions: self.actions.clone(),
         }
     }
@@ -83,6 +88,7 @@ impl Clone for InputFrame {
         self.typed.clone_from(&source.typed);
         self.typed_keys.clone_from(&source.typed_keys);
         self.device = source.device;
+        self.layout = source.layout;
         self.actions.clone_from(&source.actions);
     }
 }
@@ -98,6 +104,7 @@ impl InputFrame {
             typed: String::new(),
             typed_keys: Vec::new(),
             device: Device::KeyboardAndMouse,
+            layout: 0,
             actions: vec![ActionState::default(); actions],
         }
     }

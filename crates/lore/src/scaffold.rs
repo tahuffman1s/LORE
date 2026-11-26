@@ -31,8 +31,8 @@ const CLAUDE_SETTINGS: &str = include_str!("../template/claude-settings.json");
 pub const LEVEL_FILE: &str = "level.glb";
 
 /// The level a new game starts with, as the bytes of its `level.glb`: a
-/// small arena with a wall around it, a red end and a blue end, cover and
-/// two platforms with ramps.
+/// small walled garden with one start, a tower to walk to, a house, and
+/// steps and a ramp to climb.
 pub const STARTER_LEVEL: &[u8] = include_bytes!("../template/level.glb");
 
 /// A game folder that [`new_game`] just created.

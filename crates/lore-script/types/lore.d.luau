@@ -168,6 +168,16 @@ declare extern type Character with
     --- Example: print(game.player.gravity)
     gravity: number
 
+    --- Metres between the player's footsteps when walking: 2 until
+    --- `game.player:setStride` says otherwise.
+    --- Example: print(game.player.stride)
+    stride: number
+
+    --- What every step and landing of the player is multiplied by in
+    --- loudness: 1 until `game.player:setStepLoudness` says otherwise.
+    --- Example: print(game.player.stepLoudness)
+    stepLoudness: number
+
     --- The highest thing the character vaults, in metres above their
     --- feet: 1.1 until `game.player:setVaultHeight`. It counts once
     --- `game.player:setAbility("vault", true)` has been said.
@@ -368,6 +378,23 @@ declare extern type Character with
     --- feels floaty in a game, and 1.6 the Moon's.
     --- Example: game.player:setGravity(1.6)
     function setGravity(self, metresPerSecondSquared: number): ()
+
+    --- How many metres the player goes between footsteps when walking,
+    --- from 0.1 to 20. 2 if never set. Running steps are a little longer
+    --- and crouched steps shorter, in the same proportion. A short stride
+    --- is a pattering one and a long stride a loping one. Kept when the
+    --- script is saved and reloaded, even if the line that set it is gone.
+    --- Example: game.player:setStride(1.5)
+    function setStride(self, metres: number): ()
+
+    --- How loud the player's steps and landings are, from 0 to 4 (1 if never
+    --- set). This is the noise anything listening hears as well as what is
+    --- played; to change only what is played, use
+    --- `game.audio.setVolume("footstep", 0.3)`. 0 makes steps silent and
+    --- unheard. Kept when the script is saved and reloaded, even if the line
+    --- that set it is gone.
+    --- Example: game.player:setStepLoudness(0)
+    function setStepLoudness(self, loudness: number): ()
 
     --- Turns one of the player's abilities on or off. Each is off until a
     --- script turns it on, except "swim", which is on:
@@ -793,6 +820,33 @@ declare extern type Thing with
     --- Whether `who` is inside the thing's zone now.
     --- Example: if game.zone("Bridge"):has(game.player) then print("Still on it") end
     function has(self, who: Character): boolean
+end
+
+--- A noise the game made: what a `game.onNoise` function is handed.
+--- Example: game.onNoise(function(noise) if noise.byPlayer and noise.loudness > 0.5 then print("Heard " .. noise.sound) end end)
+declare extern type Noise with
+    --- The name it is played under before any `game.audio.replace`. The
+    --- engine's are "footstep", "landing", "gunshot", "dry-fire", "reload",
+    --- "splash", "splash-small", "wade", "swim-stroke", "surface", "bubbles",
+    --- "sizzle", "drip", "thunder", "thunder-far", "explosion" and "impact"
+    --- (each has a starter sound); a weapon's shot has its own `fireSound`,
+    --- `reloadSound` or `emptySound` if it names one.
+    --- Example: if noise.sound == "footstep" then print("a step") end
+    sound: string
+    --- Where it was made, in metres.
+    --- Example: print(noise.position.x, noise.position.z)
+    position: vector
+    --- How loud it was, from 0 up. 1 is a gunshot; a walking step is 0.6, a
+    --- crouched one 0.25. `game.player:setStepLoudness` scales steps.
+    --- Example: if noise.loudness > 0.5 then print("loud") end
+    loudness: number
+    --- How far away it can be heard (metres).
+    --- Example: print(noise.heardWithin)
+    heardWithin: number
+    --- True for the player's own steps and weapon; false for what the
+    --- world makes: thunder, dripping, an explosion's blast, a bullet strike.
+    --- Example: if not noise.byPlayer then print("the world made a noise") end
+    byPlayer: boolean
 end
 
 --- A hurt: what a `game.onDamage` function is handed.
@@ -1658,6 +1712,35 @@ declare extern type Shader with
     function remove(self): ()
 end
 
+--- What `game.input.onControlsChanged` is handed when the player's controls
+--- file was read again, or could not be.
+--- Example: game.input.onControlsChanged(function(change) toast.text = change.message end)
+export type ControlsChange = {
+    --- The same sentence the engine's notice shows, e.g. "Controls updated: jump Space to F".
+    message: string,
+    --- Each action whose buttons changed; empty when none did.
+    changes: { BindingChange },
+    --- What is wrong with the file, or nil when it was good.
+    problem: string?,
+    --- The file the problem is in, or, when the file was fine, the player's own
+    --- controls file ("bindings.toml"), with enough of its path to tell the player's from the game's.
+    file: string,
+    --- The line of the problem, or nil when there is none to point at.
+    line: number?,
+}
+
+--- One action whose buttons the player changed, named as `game.input.label`
+--- names them.
+--- Example: for _, one in change.changes do print(one.action, one.before, one.after) end
+export type BindingChange = {
+    --- The action's name: "jump".
+    action: string,
+    --- What it was bound to: "Space".
+    before: string,
+    --- What it is bound to now: "F".
+    after: string,
+}
+
 --- One of the player's settings, as `game.settings.list()` describes it:
 --- enough for a menu to build a row for it without knowing its name.
 --- Example: for _, setting in game.settings.list() do print(setting.label, setting.value) end
@@ -2476,6 +2559,21 @@ declare game: {
         reach: number?,
         --- How fast it fires, in shots a minute.
         roundsPerMinute: number?,
+        --- The sound played for each shot; the engine's "gunshot" if left out.
+        --- Example: fireSound = "twang"
+        fireSound: string?,
+        --- The sound played when a reload begins; "reload" if left out.
+        --- Example: reloadSound = "bow-draw"
+        reloadSound: string?,
+        --- The sound played when the trigger is pulled on an empty magazine;
+        --- "dry-fire" if left out.
+        --- Example: emptySound = "string-snap"
+        emptySound: string?,
+        --- How far away, in metres, its shot can be heard (by the player and
+        --- by anything listening through game.onNoise). Above 0; 150 if left
+        --- out. A quiet weapon, like a bow, says less.
+        --- Example: heardWithin = 20
+        heardWithin: number?,
         --- The wait after a burst before the next one.
         burstPause: number?,
         --- How long after the weapon is handed over before it can fire.
@@ -2599,6 +2697,17 @@ declare game: {
     --- decides what a hit means.
     --- Example: game.onWeaponHit(function(hit) if hit.victim then print(hit.shooter.name .. " hit " .. hit.victim.name .. " for " .. hit.damage) end end)
     onWeaponHit: (handler: (hit: WeaponHit) -> ()) -> (),
+
+    --- Calls `handler` with every noise the game makes, on the tick it is
+    --- made and in the order made: the player's steps and landings, their
+    --- weapon's shots, dry clicks and reloads, splashes, thunder, blasts
+    --- and bullet strikes. It is how a game lets guards hear. Return false
+    --- to keep the engine from playing it; return nothing to let it play.
+    --- Example: game.onNoise(function(noise) if noise.sound == "footstep" then print("a step at", noise.position.x, noise.position.z) end end)
+    --- Example: game.onNoise(function(noise) if noise.sound == "thunder" then return false end end)
+    --- The noise is still made when you return false, so anything else that
+    --- listens still hears it. A noise nothing registered for costs nothing.
+    onNoise: (handler: (noise: Noise) -> boolean?) -> (),
 
     --- Calls `handler` when someone starts to reload, with who it is. This
     --- is not `game.onReload`, which is about the script file being saved.
@@ -3245,6 +3354,36 @@ declare game: {
         --- this is how it stops a looped sound it has lost.
         --- Example: game.after(60, function() game.audio.stopAll() end)
         stopAll: () -> (),
+
+        --- Sets how loud the engine plays one of its own sounds (not the
+        --- master volume). `name` is any name a `Noise.sound` can have, or a
+        --- weapon's own sound. 1 is as now, 0 is off, up to 4.
+        --- Only what is played changes: the noise is still made, as loud as
+        --- before, and whatever listens to noises still hears it. A name
+        --- that is almost the name of a sound the game has is an error
+        --- naming it; any other name is accepted, for a sound that is not
+        --- a file yet. Not for sounds your script plays itself: give those
+        --- a `volume` option. Kept when the script is saved and reloaded,
+        --- even if the line that set it is gone: set it back to 1 to undo.
+        --- Example: game.audio.setVolume("footstep", 0.3)
+        setVolume: (name: string, volume: number) -> (),
+
+        --- How loud the engine plays the sounds it plays by itself under
+        --- `name`: 1 if `game.audio.setVolume` has never been used for it.
+        --- Example: print(game.audio.getVolume("gunshot"))
+        getVolume: (name: string) -> number,
+
+        --- Makes the engine play the sound `withName` wherever it would
+        --- play `name` by itself, such as for every footstep. `withName`
+        --- must be a sound the game has: any other is an error naming the
+        --- nearest one. If its file is lost later, the engine's own sound
+        --- plays instead, so nothing goes silent. `game.audio.replace(name,
+        --- nil)` goes back to the engine's own. Only what is played changes:
+        --- the noise keeps its own sound name. Kept when the script is saved
+        --- and reloaded, even if the line that set it is gone.
+        --- Example: game.audio.replace("footstep", "boots-on-wood")
+        --- Example: game.audio.replace("footstep", nil)
+        replace: (name: string, withName: string?) -> (),
     },
 
     --- The HUD: text, bars and boxes drawn over the game, such as health, a
@@ -3425,7 +3564,7 @@ declare game: {
         --- hear the player at a time: "gameplay" (moving, looking, "jump"
         --- and the rest) when a game starts, or "menu" (the "menu_..."
         --- actions), in which the mouse is a pointer and no longer turns
-        --- the view. Use "menu" while your own shop or inventory is open,
+        --- the view. A set made with `addSet` works the same way. Use "menu" while your own shop or inventory is open,
         --- and always give the player a way back: in "menu" the "pause"
         --- action is not heard, so go back to "gameplay" on "menu_back"
         --- (Escape, or B on a gamepad). The button that was down when the
@@ -3433,6 +3572,7 @@ declare game: {
         --- The window switches when it draws its next picture, so read the
         --- new set's actions in later ticks, not in the tick that calls
         --- useSet. Saving the script puts the game back in "gameplay".
+        --- Example: game.input.useSet("riding")
         --- Example: if game.input.justPressed("interact") then game.input.useSet("menu") end
         --- Example: if game.input.justPressed("menu_back") then game.input.useSet("gameplay") end
         useSet: (set: string) -> (),
@@ -3448,16 +3588,51 @@ declare game: {
         --- engine's own "menu_click" or "use_item", and not the name of one
         --- of the engine's actions (read those with `pressed`). `bindings`
         --- are button names: "F1", "MouseLeft", "GamepadSelect",
-        --- "LeftBumper"... Give a gamepad button too, so nobody is left
-        --- out. A gamepad has two buttons LORE leaves free for a game:
+        --- "LeftBumper"... Give at least one keyboard or mouse button and one
+        --- gamepad button; without both, bind stops with an error. A
+        --- gamepad has two buttons LORE leaves free for a game:
         --- GamepadSelect and LeftBumper. Sharing any other button with an
         --- engine action works, but the player is told of the clash. Write
         --- it at the top of the file, outside any function; once made, read
-        --- it like any action. The action works whichever set of actions is
-        --- live.
+        --- it like any action. Bind each action once: a name written twice is
+        --- an error. A saved script's actions are in use at once: no need to
+        --- start the game again.
         --- Example: game.input.bind("open_map", { "F1", "GamepadSelect" })
+        --- Example: game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })
+        --- Without `set` the action works whichever set of actions is live;
+        --- with `{ set = "riding" }` it is heard only while that set is live
+        --- (one of the engine's, or one made above it with `addSet`).
         --- Example: if game.input.justPressed("open_map") then mapShown = not mapShown end
-        bind: (name: string, bindings: { string }) -> (),
+        bind: (name: string, bindings: { string }, options: { set: string? }?) -> (),
+
+        --- Makes a set of actions of the game's own, such as "riding" for
+        --- the actions that only work on a horse. `name` is 1 to 40 lower
+        --- case letters, digits and underscores, and not "gameplay", "menu",
+        --- "editor" (the level editor's) or a set you already made. `mouse` says what the mouse
+        --- is for while the set is live: "look" (the default) turns the
+        --- view, "pointer" shows a cursor for a menu. Write it at the top of
+        --- the file, outside any function, above the `bind` calls that name
+        --- it. Switch to it with `useSet`.
+        --- Example: game.input.addSet("riding")
+        --- Example: game.input.addSet("shop", { mouse = "pointer" })
+        addSet: (name: string, options: { mouse: ("look" | "pointer")? }?) -> (),
+
+        --- Every set of actions the game has: "gameplay", "menu" and the
+        --- ones made with `addSet` (not the level editor's own).
+        --- Example: for _, name in game.input.sets() do print(name) end
+        sets: () -> { string },
+
+        --- The names of the actions: all of them, or only those heard while
+        --- one set is live (the game's own actions with no set are heard in
+        --- every set).
+        --- Example: for _, name in game.input.actions("riding") do print(name) end
+        actions: (set: string?) -> { string },
+
+        --- The buttons an action is bound to right now, with the player's
+        --- own bindings file taken into account, written as `bind` takes
+        --- them: { "F1", "GamepadSelect" }.
+        --- Example: print(table.concat(game.input.bindings("open_map"), ", "))
+        bindings: (action: string) -> { string },
 
         --- Where the pointer is, in pixels on a screen 1080 high, from the
         --- top left corner: x right and y down. nil when there is no free
@@ -3526,6 +3701,21 @@ declare game: {
         --- drawing, to show the right hint.
         --- Example: hint.text = if game.input.usingGamepad() then "Press A" else "Press E"
         usingGamepad: () -> boolean,
+
+        --- Calls `handler` when the player's controls file is saved and read again, and once at start if it is wrong.
+        --- `change.message` is the sentence the engine's notice shows, `change.changes` lists
+        --- each action that changed (`action`, `before`, `after`; empty when none did),
+        --- `change.problem` says what is wrong (nil when the file was good), and `change.file`
+        --- and `change.line` say where (`line` is nil when unknown). The last good controls stay in use.
+        --- Call it once, at the top of the file.
+        --- Example: game.input.onControlsChanged(function(change) toast.text = change.message end)
+        onControlsChanged: (handler: (change: ControlsChange) -> ()) -> (),
+
+        --- `false` hides the engine's own controls notice, both the short notice and the
+        --- error bar, so a game can show `change.message` its own way; `true` brings it back.
+        --- It lasts until set back, including across a saved script.
+        --- Example: game.input.showControlsNotice(false)
+        showControlsNotice: (shown: boolean) -> (),
     },
 
     --- The player's settings: how loud the game is, how the view turns,

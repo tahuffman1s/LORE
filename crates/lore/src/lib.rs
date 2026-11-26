@@ -32,6 +32,7 @@ mod character;
 #[doc(hidden)]
 pub mod cli;
 pub mod controls;
+mod controls_notice;
 #[cfg(feature = "editor")]
 pub mod editor;
 mod error_overlay;

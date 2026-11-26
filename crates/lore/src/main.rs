@@ -173,9 +173,9 @@ enum Command {
                       running goes back at its next start. To keep the file \
                       somewhere else, set LORE_BINDINGS to its path.\n\n\
                       Give a game's folder (lore controls my-game) to list the actions the \
-                      game's script made for\nitself with game.input.bind as well. They are \
-                      kept in the file's [game_bindings] table, so a change to\nthem stays \
-                      with that game."
+                      game's script made for\nitself with game.input.bind as well. A game with \
+                      actions of its own gets a file of its own, which wins over\nthe \
+                      first file for that game alone; it says where, and what came from which."
     )]
     Controls {
         /// A game's folder, to show the controls the game's script made for itself too
@@ -610,6 +610,16 @@ fn check(folder: &Path) -> Result<(), String> {
             });
         }
         game.host_mut().weapon_reloading(player);
+        // A footstep and a gunshot heard, so game.onNoise functions run.
+        for (sound, loudness, heard_within) in [("footstep", 0.6, 30.0), ("gunshot", 1.0, 150.0)] {
+            game.host_mut().noise_made(&lore_script::NoiseTold {
+                sound,
+                position: [DUMMY_AT[0], 0.0, DUMMY_AT[2]],
+                loudness,
+                heard_within,
+                by_player: true,
+            });
+        }
         game.tick(input.tick(), step);
         // Dying is being put back at a spawn point: game.onSpawn again.
         game.host_mut().player_died();
@@ -952,6 +962,7 @@ fn run(folder: &Path) -> Result<(), String> {
         return play_pack(folder);
     }
     let mut config = player_config();
+    config.game_controls_file = lore::controls::game_file(&cli::game_name(folder));
     let game = open(folder, &mut config, "run")?;
     config.level = cli::load_level(folder).map_err(|error| not_started(&error, "run"))?;
     // Exporting the level again shows up in the open window.
@@ -1043,6 +1054,9 @@ fn start(config: Config, game: ScriptGame) -> Result<(), String> {
 /// packaged game started by its player, or `lore run` given a pack.
 fn play_pack(pack: &Path) -> Result<(), String> {
     let mut config = player_config();
+    // A pack is named as its game's folder was, so they share a bindings file.
+    config.game_controls_file =
+        lore::controls::game_file(&pack.file_stem().unwrap_or_default().to_string_lossy());
     let packed = player::open_with_settings(pack, &config.actions, config.settings)
         .map_err(|error| error.to_string())?;
     // The engine hears the actions the game's script made for itself.
