@@ -53,6 +53,22 @@ pub fn scan(game: &Path) -> Vec<String> {
     sorted_families(found)
 }
 
+/// The families of font files given as bytes, sorted and kept once as
+/// [`scan`] does; bytes that are not a font are left out. For a game read
+/// from its pack.
+#[must_use]
+pub fn families_of<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> Vec<String> {
+    sorted_families(files.into_iter().filter_map(family_of).collect())
+}
+
+/// Whether a file name in a game is a font: it ends in `.ttf` or `.otf`,
+/// in any capitals.
+#[must_use]
+pub fn is_font_file(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.ends_with(".ttf") || name.ends_with(".otf")
+}
+
 /// `names` sorted without regard to capitals, then each family once.
 fn sorted_families(mut names: Vec<String>) -> Vec<String> {
     names.sort_by(|a, b| {

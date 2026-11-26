@@ -160,7 +160,7 @@ pub struct ScriptHost {
     /// The HUD images the running version knows.
     images: Rc<Vec<crate::images::HudImageInfo>>,
     /// The font families of a game given as text, which has no folder to
-    /// look in: see [`with_hud_fonts`](Self::with_hud_fonts).
+    /// look in: see [`from_sources_with_fonts`](Self::from_sources_with_fonts).
     given_fonts: Rc<Vec<String>>,
     /// The font families the running version knows.
     fonts: Rc<Vec<String>>,
@@ -336,6 +336,7 @@ impl ScriptHost {
             settings,
             Vec::new(),
             placed,
+            Vec::new(),
         ))
     }
 
@@ -395,7 +396,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, Vec::new(), Vec::new())
+        Self::with_files(files, actions, settings, Vec::new(), Vec::new(), Vec::new())
     }
 
     /// Runs a game whose scripts are given as text, as
@@ -410,7 +411,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, images, Vec::new())
+        Self::with_files(files, actions, settings, images, Vec::new(), Vec::new())
     }
 
     /// Runs a game whose scripts are given as text, as
@@ -426,7 +427,25 @@ impl ScriptHost {
         placed: Vec<crate::Placed>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, images, placed)
+        Self::with_files(files, actions, settings, images, placed, Vec::new())
+    }
+
+    /// Runs a game whose scripts are given as text, as
+    /// [`from_sources_with_placed`](Self::from_sources_with_placed) does,
+    /// with the font `families` it has (sorted): a packaged game's, read
+    /// from the font files in its pack, as a game on disk has them read
+    /// from its `fonts` folder.
+    #[must_use]
+    pub fn from_sources_with_fonts(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        images: Vec<crate::images::HudImageInfo>,
+        families: Vec<String>,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+        placed: Vec<crate::Placed>,
+    ) -> Self {
+        let files = Files::Memory(scripts.into_iter().collect());
+        Self::with_files(files, actions, settings, images, placed, families)
     }
 
     /// The game's HUD images, by name, sorted, as the running script knows
@@ -447,14 +466,6 @@ impl ScriptHost {
         &self.fonts
     }
 
-    /// Gives a game run from text the font families it has: a packaged
-    /// game's, as a game on disk has them read from its `fonts` folder.
-    #[must_use]
-    pub fn with_hud_fonts(mut self, families: Vec<String>) -> Self {
-        self.given_fonts = Rc::new(families);
-        self
-    }
-
     /// A host running the `main.luau` in `files`.
     fn with_files(
         files: Files,
@@ -462,6 +473,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
         images: Vec<crate::images::HudImageInfo>,
         placed: Vec<crate::Placed>,
+        families: Vec<String>,
     ) -> Self {
         let files = Rc::new(files);
         let things = Rc::<crate::thing_api::ThingState>::default();
@@ -495,7 +507,7 @@ impl ScriptHost {
             audio: Rc::default(),
             given_images: Rc::new(images),
             images: Rc::default(),
-            given_fonts: Rc::default(),
+            given_fonts: Rc::new(families),
             fonts: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
