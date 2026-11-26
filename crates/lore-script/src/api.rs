@@ -147,6 +147,9 @@ pub(crate) struct Handlers {
     pub dropped: Vec<Function>,
     /// `game.input.onControlsChanged`.
     pub controls_changed: Vec<Function>,
+    /// `game.clock.onHour`: each with the hour of the day it listens for,
+    /// or none for every hour.
+    pub hour: Vec<(Option<u8>, Function)>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -499,6 +502,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     game.set("sky", weather_api::sky(lua, shared)?)?;
+    game.set("clock", crate::clock_api::clock(lua, shared)?)?;
     game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
     game.set("look", crate::look_api::look(lua, shared)?)?;
     let camera = crate::camera_api::camera(lua, shared)?;
@@ -533,6 +537,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
     members.push("camera");
+    members.push("clock");
     members.push("fluids");
     members.push("frames");
     members.push("hud");
@@ -977,7 +982,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 64] = [
+        let groups: [(&str, &[&str]); 65] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1003,6 +1008,7 @@ mod tests {
             ("game.settings.", SETTINGS_FUNCTIONS),
             ("Setting.", settings_api::SETTING_FIELDS),
             ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
+            ("game.clock.", crate::clock_api::CLOCK_FIELDS),
             ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),

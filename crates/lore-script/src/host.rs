@@ -612,6 +612,11 @@ impl ScriptHost {
         self.run_screens(input);
         self.hurts_due();
         self.switches_due();
+        // Hours passed by the clock, or skipped by a timer, a menu or the
+        // start, are heard before the tick's rules read the hour.
+        if !stopped {
+            self.hours_due();
+        }
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
         self.hurts_due();
         self.switches_due();
@@ -1156,6 +1161,93 @@ impl ScriptHost {
     #[must_use]
     pub fn hour(&self) -> Option<f64> {
         self.weather.hour()
+    }
+
+    /// The hour of the day on the world's clock, from 0 up to 24 (13.5 is
+    /// half past one in the afternoon), or `None` while the game has never
+    /// said a time or a day length: such a game has no day and night.
+    ///
+    /// It is what `game.clock.hour` gives. The script's tick moves it on, so
+    /// the world reads, during its own tick, the hour the last tick left.
+    #[must_use]
+    pub fn time_of_day(&self) -> Option<f64> {
+        self.weather.day.time_of_day()
+    }
+
+    /// The day it is on the world's clock, counted from 1 (`game.clock.day`),
+    /// or `None` while the clock is unset.
+    #[must_use]
+    pub fn day(&self) -> Option<u32> {
+        self.weather.day.day()
+    }
+
+    /// The world's clock as plain data, for a save to keep.
+    #[must_use]
+    pub fn world_clock(&self) -> crate::WorldClock {
+        self.weather.day.state()
+    }
+
+    /// Puts back a clock that [`world_clock`](Self::world_clock) gave. The
+    /// hours it had passed are not told to `game.clock.onHour` again.
+    pub fn restore_world_clock(&mut self, clock: crate::WorldClock) {
+        self.weather.day.restore(clock);
+    }
+
+    /// Calls every `game.clock.onHour` function once for each hour of a
+    /// day, from 0 to 23, as if a whole day passed, so that `lore check`
+    /// runs them. Gives how many there are.
+    pub fn pretend_hours(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let count = version.shared.handlers.borrow().hour.len();
+        for hour in 0..24 {
+            self.tell_hour(hour);
+        }
+        count
+    }
+
+    /// Tells `game.clock.onHour` functions of each hour the clock has come
+    /// to since the last tick.
+    fn hours_due(&mut self) {
+        // Hours nobody can hear wait to be told.
+        if self.paused || self.running.is_none() {
+            return;
+        }
+        let mut passed = [0_u8; 24];
+        let mut count = 0;
+        self.weather.day.hours_due(|hour| {
+            if let Some(slot) = passed.get_mut(count) {
+                *slot = hour;
+                count += 1;
+            }
+        });
+        for &hour in passed.iter().take(count) {
+            self.tell_hour(hour);
+        }
+    }
+
+    /// Calls the `game.clock.onHour` functions that listen for `hour`, and
+    /// those that listen for every hour, in the order they were added.
+    fn tell_hour(&mut self, hour: u8) {
+        if self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let count = shared.handlers.borrow().hour.len();
+        for index in 0..count {
+            let entry = shared.handlers.borrow().hour.get(index).cloned();
+            let Some((wanted, handler)) = entry else {
+                break;
+            };
+            if wanted.is_some_and(|wanted| wanted != hour) {
+                continue;
+            }
+            if !self.call(&shared, &handler, hour) {
+                break;
+            }
+        }
     }
 
     /// The weather as the script has said it and as it now is: on its way,

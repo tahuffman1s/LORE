@@ -121,7 +121,7 @@ enum Command {
                       it.\nPresses every action in turn, so code that reads input is run \
                       too. Then stands a\npretend training dummy in front of the player and \
                       tells the script of a pretend shot\nthat hits it, one that hits a wall, \
-                      a reload, the player dying and\nstanding in a burning puddle.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
+                      a reload, the player dying,\nstanding in a burning puddle and a whole day passing.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
                       used by scripts,\nautomated checks and AI assistants. The start of the \
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
@@ -537,6 +537,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut zones = 0;
     let mut carrying = false;
     let mut slides = 0;
+    let mut hours = 0;
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
         for _ in 0..TICKS {
@@ -695,6 +696,10 @@ fn check(folder: &Path) -> Result<(), String> {
         // and to have found the player in its way.
         slides = game.host_mut().pretend_slides();
         game.tick(input.tick(), step);
+        // And a whole day is said to pass, so each game.clock.onHour
+        // function hears its hour.
+        hours = game.host_mut().pretend_hours();
+        game.tick(input.tick(), step);
         // And a picture of the game after all that.
         game.host_mut().draw(0.5);
     }
@@ -846,6 +851,17 @@ fn check(folder: &Path) -> Result<(), String> {
              errors. Nothing really moved.",
             if slides == 1 { "was" } else { "were" }
         );
+    }
+    match hours {
+        0 => {}
+        1 => println!(
+            "A whole day was said to pass, so the one game.clock.onHour function heard its \
+             hour, with no errors. The clock itself was not moved."
+        ),
+        hours => println!(
+            "A whole day was said to pass, so each of the {hours} game.clock.onHour functions \
+             heard its hours, with no errors. The clock itself was not moved."
+        ),
     }
     if carrying {
         println!(
