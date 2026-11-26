@@ -70,14 +70,6 @@ impl Play {
                 settings,
             ),
         };
-        // The editor's controls are fixed, so a game's own actions are not
-        // heard here; `lore run` plays with them.
-        if game.host().actions().actions().count() > actions.actions().count() {
-            log::info!(
-                "The game's own actions (made with game.input.bind) cannot be pressed while \
-                 playing from the editor. Play the game with `lore run` to try them."
-            );
-        }
         // The map as the editor has it, whatever is in the file by now.
         let game = game.with_map(map.clone());
         let (game, from_here) = Playing::start_from(game, ground, actions, eye, facing);
@@ -159,7 +151,6 @@ impl Play {
     }
 
     /// What runs the game's script.
-    #[cfg(test)]
     pub(super) fn host(&self) -> &lore_script::ScriptHost {
         self.game.world().game().host()
     }

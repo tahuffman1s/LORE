@@ -307,23 +307,32 @@ impl std::error::Error for AppError {
 /// or no graphics card here can draw with Vulkan 1.3. The error's message says
 /// what to do about it.
 pub fn run(mut config: Config, game: impl Game) -> Result<(), AppError> {
+    let controls = watch_controls(&mut config);
+    start(config, game, controls, false)
+}
+
+/// Reads the player's bindings file and the game's onto `config.actions`
+/// and starts watching both, as the config says.
+fn watch_controls(config: &mut Config) -> Option<controls::Live> {
     let game_file = config.game_controls_file.take();
-    let controls = config.controls_file.take().map(|file| {
+    config.controls_file.take().map(|file| {
         let (live, said) = controls::Live::start(file, game_file, &mut config.actions);
         for problem in said {
             log::warn!("{problem}");
         }
         live
-    });
-    start(config, game, controls, false)
+    })
 }
 
 /// Runs `game` as [`run`] does, as the editor: a ground grid is drawn over
 /// the level, and holding the right mouse button captures the mouse to look
 /// around with, whatever the live action set does with it.
 #[cfg(feature = "editor")]
-pub(crate) fn run_editor(config: Config, game: impl Game) -> Result<(), AppError> {
-    start(config, game, None, true)
+pub(crate) fn run_editor(mut config: Config, game: impl Game) -> Result<(), AppError> {
+    // `config.actions` are the editor's, with the game's: the files are
+    // read onto both, and the editor takes the result from its frame.
+    let controls = watch_controls(&mut config);
+    start(config, game, controls, true)
 }
 
 /// Opens the window and runs `game` in it, as the editor if `editing`.
