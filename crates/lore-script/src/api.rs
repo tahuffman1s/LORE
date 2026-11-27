@@ -65,6 +65,7 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "sides",
     "side",
     "onFeelingChange",
+    "onCheck",
     "seed",
     "setSeed",
     "chance",
@@ -171,6 +172,11 @@ pub(crate) struct Handlers {
     pub hour: Vec<(Option<u8>, Function)>,
     /// `game.onFeelingChange`.
     pub feeling: Vec<Function>,
+    /// `game.bot.onDone` and `game.bot.onStuck`.
+    pub bot_done: Vec<Function>,
+    pub bot_stuck: Vec<Function>,
+    /// `game.onCheck`: what `lore check --play` has the bot do.
+    pub check: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -249,6 +255,9 @@ pub(crate) struct Shared {
     pub thing_uses: crate::thing_api::ThingUses,
     /// Who is an NPC. It outlives this version of the script.
     pub npcs: Rc<crate::npc_api::NpcState>,
+    /// What the scripts asked of the bot. It outlives this version of the
+    /// script.
+    pub bot: Rc<crate::bot_api::BotState>,
     /// The table handed to the script for each noise of the tick, by its
     /// place in the tick's list, once built: `game.onNoise` and every NPC's
     /// `onHear` get the same one. Belongs to this version's Lua.
@@ -407,7 +416,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
-    let events: [(&'static str, &'static str, List); 10] = [
+    let events: [(&'static str, &'static str, List); 11] = [
         ("onDamage", "game.onDamage(function(hurt) ... end)", |h| {
             &mut h.damage
         }),
@@ -449,6 +458,11 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
             "onDrop",
             "game.onDrop(function(thing, thrown) ... end)",
             |h| &mut h.dropped,
+        ),
+        (
+            "onCheck",
+            "game.onCheck(function() game.bot.goTo(\"Tower\") end)",
+            |h| &mut h.check,
         ),
     ];
     for (name, example, list) in events {
@@ -557,6 +571,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         crate::difficulty_api::difficulty(lua, shared)?,
     )?;
     game.set("clock", crate::clock_api::clock(lua, shared)?)?;
+    game.set("bot", crate::bot_api::bot(lua, shared)?)?;
     game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
     game.set("look", crate::look_api::look(lua, shared)?)?;
     let camera = crate::camera_api::camera(lua, shared)?;
@@ -590,6 +605,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     let mut members = GAME_FUNCTIONS.to_vec();
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
+    members.push("bot");
     members.push("camera");
     members.push("difficulty");
     members.push("clock");
@@ -1039,7 +1055,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 70] = [
+        let groups: [(&str, &[&str]); 71] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1067,6 +1083,7 @@ mod tests {
             ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
             ("game.difficulty.", crate::difficulty_api::DIFFICULTY_FIELDS),
             ("game.clock.", crate::clock_api::CLOCK_FIELDS),
+            ("game.bot.", crate::bot_api::BOT_FIELDS),
             ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),

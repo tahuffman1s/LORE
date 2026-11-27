@@ -48,7 +48,7 @@ thread_local! {
 }
 
 /// Starts collecting what is printed on this thread, afresh.
-fn capture() {
+pub(super) fn capture() {
     QUIET_HELD.with_borrow_mut(|held| {
         if held.is_none() {
             *held = Some(
@@ -213,12 +213,12 @@ fn until_still(world: &mut World, most: u32) -> u32 {
 }
 
 /// What the script printed since the world was made, in order.
-fn printed(_: &World) -> Vec<String> {
+pub(super) fn printed(_: &World) -> Vec<String> {
     PRINTED.with_borrow(Clone::clone)
 }
 
 /// What was warned of since the world was made, in order.
-fn warned() -> Vec<String> {
+pub(super) fn warned() -> Vec<String> {
     WARNED.with_borrow(Clone::clone)
 }
 

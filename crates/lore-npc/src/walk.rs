@@ -32,7 +32,7 @@ const ARRIVE_HEIGHT: f32 = 1.6;
 
 /// How far before a shut door an NPC stops to open it, in metres from
 /// where its way goes into the door: out of the way of the door's swing.
-const DOOR_REACH: f32 = 1.4;
+pub(crate) const DOOR_REACH: f32 = 1.4;
 
 /// How quickly a body turns, in radians a second: a quarter turn in a
 /// third of a second.
@@ -308,24 +308,24 @@ pub struct Walk {
 }
 
 /// The yaw that faces along `d` across the ground: turning left from -Z.
-fn yaw_along(d: [f32; 2]) -> f32 {
+pub(crate) fn yaw_along(d: [f32; 2]) -> f32 {
     libm::atan2f(-d[0], -d[1])
 }
 
 /// `angle` brought within a half turn of zero.
-fn wrapped(angle: f32) -> f32 {
+pub(crate) fn wrapped(angle: f32) -> f32 {
     let tau = std::f32::consts::TAU;
     (angle + std::f32::consts::PI).rem_euclid(tau) - std::f32::consts::PI
 }
 
 /// How far apart two points are across the ground.
-fn across(a: [f32; 3], b: [f32; 3]) -> f32 {
+pub(crate) fn across(a: [f32; 3], b: [f32; 3]) -> f32 {
     libm::hypotf(b[0] - a[0], b[2] - a[2])
 }
 
 /// The way from `a` to `b` across the ground, at its length, or `None`
 /// when they are in the same spot.
-fn toward(a: [f32; 3], b: [f32; 3]) -> Option<[f32; 2]> {
+pub(crate) fn toward(a: [f32; 3], b: [f32; 3]) -> Option<[f32; 2]> {
     let d = [b[0] - a[0], b[2] - a[2]];
     let long = libm::hypotf(d[0], d[1]);
     (long > 1e-4 && long.is_finite()).then(|| [d[0] / long, d[1] / long])
@@ -347,7 +347,7 @@ fn unit(d: [f32; 2]) -> Option<[f32; 2]> {
 }
 
 /// How many ticks of `seconds` each are `span` seconds, at least one.
-fn ticks(span: f32, seconds: f32) -> u32 {
+pub(crate) fn ticks(span: f32, seconds: f32) -> u32 {
     let ticks = (span / seconds.max(1e-4)).ceil();
     // A few seconds of ticks: far fewer than a u32 holds.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

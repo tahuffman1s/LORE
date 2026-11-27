@@ -126,11 +126,21 @@ enum Command {
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
                       level.glb, is loaded too,\nand a level that cannot be loaded fails the \
-                      check with what to change."
+                      check with what to change.\n\nWith --play, the game is then played for \
+                      real on its level, with no window and as fast\nas it will go: the bot \
+                      plays the plan game.onCheck gives it, pressing the player's own\nbuttons. \
+                      What it did is shown with the game time and the place, and the check \
+                      fails\nif it gets stuck or the plan is not done within 10 minutes of \
+                      game time. For example:\n  game.onCheck(function()\n      \
+                      game.bot.goTo(\"Tower\")\n      game.bot.use(\"Lever\")\n  end)"
     )]
     Check {
         /// The game's folder. Leave it out to check the game in the folder you are in
         folder: Option<PathBuf>,
+        /// Then play the game for real, with no window: the bot plays the plan
+        /// game.onCheck gives it, and the check fails if it does not finish
+        #[arg(long)]
+        play: bool,
     },
     /// Make a download of a game that players can unpack and run
     #[command(
@@ -348,7 +358,10 @@ fn command() -> Result<(), String> {
         }
         #[cfg(feature = "editor")]
         Some(Command::Edit { folder }) => edit(folder.as_deref().unwrap_or(Path::new("."))),
-        Some(Command::Check { folder }) => check(folder.as_deref().unwrap_or(Path::new("."))),
+        Some(Command::Check { folder, play }) => {
+            let folder = folder.as_deref().unwrap_or(Path::new("."));
+            check(folder).and_then(|()| if play { play_check(folder) } else { Ok(()) })
+        }
         Some(Command::Package {
             folder,
             target,
@@ -541,6 +554,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut walks = 0;
     let mut turned = 0;
     let mut feelings = 0;
+    let mut bot = 0;
     let mut hours = 0;
     // Where an onHour function moved the clock to, if one did.
     let mut moved_to: Option<String> = None;
@@ -729,6 +743,9 @@ fn check(folder: &Path) -> Result<(), String> {
         // And one side is said to feel otherwise about another, so each
         // game.onFeelingChange function runs.
         feelings = game.host_mut().pretend_feeling_change();
+        // And the bot is given its plan for a check, and said to have
+        // finished one and to be stuck, so those functions run too.
+        bot = game.host_mut().pretend_bot();
         game.tick(input.tick(), step);
         // And a whole day is said to pass, so each game.clock.onHour
         // function hears its hour.
@@ -918,6 +935,13 @@ fn check(folder: &Path) -> Result<(), String> {
              function{} ran, with no errors. No feeling really changed.",
             if feelings == 1 { "the one" } else { "every" },
             if feelings == 1 { "" } else { "s" },
+        );
+    }
+    if bot > 0 {
+        println!(
+            "The bot's functions (game.onCheck, game.bot.onDone, game.bot.onStuck) ran once \
+             each, with no errors, and nothing was played. To have the bot play the plan \
+             game.onCheck gives it, run `lore check --play`."
         );
     }
     if hours > 0 {
@@ -1166,6 +1190,16 @@ fn not_started(error: &str, verb: &str) -> String {
          again, then run `lore {verb}` again. To carry on on the engine's test floor \
          meanwhile, move the level's file out of the game's folder."
     )
+}
+
+/// `lore check --play`: plays the game in `folder` for real, with no
+/// window, while the bot plays the plan `game.onCheck` gives it.
+fn play_check(folder: &Path) -> Result<(), String> {
+    lore_script::seed_new_games(Some(cli::CHECK_SEED));
+    let mut config = Config::default();
+    let game = open(folder, &mut config, "check")?;
+    let level = cli::load_level(folder)?;
+    cli::play_plan(game, level.as_ref(), &config.actions, config.tick_rate)
 }
 
 /// Starts `game` and plays it until its window is closed.

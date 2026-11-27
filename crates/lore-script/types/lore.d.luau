@@ -3125,6 +3125,14 @@ declare game: {
     --- Example: game.onFeelingChange(function(side, toward, now, before) print(side .. " went from " .. before .. " to " .. now .. " about " .. toward) end)
     onFeelingChange: (handler: (side: string, toward: string, now: Feeling, before: Feeling) -> ()) -> (),
 
+    --- Calls `handler` when `lore check --play` plays the game, to give the
+    --- bot its plan: the steps that show the game can be finished. The
+    --- check plays the game for real on its level, with no window, while
+    --- the bot does them, and fails if it gets stuck or is not done within
+    --- 10 minutes of game time. `lore run` never calls it.
+    --- Example: game.onCheck(function() game.bot.goTo("Tower") game.bot.use("Lever") end)
+    onCheck: (handler: () -> ()) -> (),
+
     --- Shows or hides the engine's own prompt (the key or button, and the
     --- thing's `useText`) while the player can use something. It is shown
     --- until a script says false: do that to draw your own from
@@ -3225,6 +3233,92 @@ declare game: {
         --- `game.difficulty.name` for that.
         --- Example: game.difficulty.onChange(function(now, before) print("Now " .. now) end)
         onChange: (handler: (now: string, before: string) -> ()) -> (),
+    },
+
+    --- Something that plays in the player's place, by pressing the player's
+    --- own buttons: the move stick, the view, jump, use, fire. It can do
+    --- only what a player can. Give it steps and it does them one after
+    --- another, starting on the next tick; each call adds one to the end of
+    --- its plan and returns at once. A place, thing or NPC is given by its
+    --- name, a thing or NPC by itself, and a place by a position.
+    --- While it plays, the person's own buttons for what it presses do
+    --- nothing, and a button they press takes the controls back unless
+    --- `playerTakesOver` is false. While the game is paused, or a screen
+    --- with `pauses = true` shows, it waits. `lore check --play` has it play the plan
+    --- `game.onCheck` gives it. There is one `onDone` for the whole plan,
+    --- not one per step: to do something after a step, add it to the plan.
+    --- `game.bot:goTo(...)` works the same.
+    bot: {
+        --- Walks to a place, thing or NPC, finding the way round walls,
+        --- jumping and crouching where the way needs it and opening doors
+        --- with the use button. Options: `run` (hold sprint) and `within`
+        --- (how close is there, in metres: 0.5 unless given, 1.5 to a thing
+        --- or NPC).
+        --- Example: game.bot.goTo("Gate")
+        --- Example: game.bot.goTo("Tower", { run = true })
+        goTo: (place: string | vector | Thing | Npc, options: { run: boolean?, within: number? }?) -> (),
+
+        --- Turns the view to look at a place, thing or NPC.
+        --- Example: game.bot.lookAt("Lever")
+        lookAt: (what: string | vector | Thing | Npc) -> (),
+
+        --- Walks up to a thing or NPC, looks at it and uses it: presses
+        --- the use button, or holds it as long as the thing needs.
+        --- Example: game.bot.use("Lever")
+        use: (what: string | Thing | Npc) -> (),
+
+        --- Presses an action by its name, or holds it for `seconds` (0 to
+        --- 3600).
+        --- Example: game.bot.press("jump")
+        --- Example: game.bot.press("crouch", 2)
+        press: (action: string, seconds: number?) -> (),
+
+        --- Attacks an NPC with what the player holds until it is down:
+        --- walks near enough to see it, aims, and uses the fire button in
+        --- bursts, reloading when it is empty. It knows only what a player
+        --- could: it walks to where the NPC was last in view, and learns
+        --- the NPC is down only while it sees it. When the weapon is empty
+        --- and no rounds are left, it is stuck (give the player rounds, or
+        --- take the step out); so it is when it does not find the NPC
+        --- where it last saw it. Today it fights only with what fires
+        --- (`game.player:giveWeapon`).
+        --- How quickly it reacts and how well it aims follow
+        --- `game.difficulty`.
+        --- Example: game.bot.attack("Bandit")
+        attack: (who: string | Npc) -> (),
+
+        --- Does nothing for `seconds` (0 to 3600).
+        --- Example: game.bot.wait(2)
+        wait: (seconds: number) -> (),
+
+        --- Gives up the plan and lets go of the controls.
+        --- Example: game.bot.stop()
+        stop: () -> (),
+
+        --- True while the plan has steps left; false once it is done or
+        --- stopped. Read only.
+        --- Example: if not game.bot.playing then game.bot.goTo("Start") end
+        playing: boolean,
+
+        --- Whether a button the person presses, or a turn of the mouse,
+        --- takes the controls back from the bot and ends its plan (the
+        --- `onStuck` functions hear "a person took the controls"). True
+        --- unless the top level of a script sets it, and true again when
+        --- the line is taken out and the script saved.
+        --- Example: game.bot.playerTakesOver = false
+        playerTakesOver: boolean,
+
+        --- Calls `handler` when the bot has done every step of its plan.
+        --- Example: game.bot.onDone(function() print("The bot got there") end)
+        onDone: (handler: () -> ()) -> (),
+
+        --- Calls `handler` with why, in a sentence, when the bot cannot do
+        --- a step, or when a person takes the controls ("The bot stopped:
+        --- a person took the controls"); the rest of the plan is given up,
+        --- so give it new steps to carry on. With no function, the log
+        --- says it.
+        --- Example: game.bot.onStuck(function(why) print(why) end)
+        onStuck: (handler: (why: string) -> ()) -> (),
     },
 
     --- How the picture is exposed for the light there is. Light in a game

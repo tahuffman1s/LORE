@@ -408,6 +408,9 @@ impl Npcs {
     pub(crate) fn step(&mut self, host: &ScriptHost, world: &Tick<'_>, dt: f32) {
         let rules = &world.ground.rules;
         if self.list.is_empty() {
+            // Nobody left for a walker to walk round.
+            self.places.clear();
+            self.going.clear();
             return;
         }
         // Where everyone stands as the tick begins, in a list kept from one
@@ -809,6 +812,12 @@ impl Npcs {
                 head: Some([eye[0], eye[1] + 0.05, eye[2]]),
             }
         }));
+    }
+
+    /// Where every NPC stood after the last tick, the player last, and how
+    /// each NPC was moving: the crowd a walker walks round.
+    pub(crate) fn crowd(&self) -> (&[[f32; 3]], &[Going]) {
+        (&self.places, &self.going)
     }
 
     /// Every NPC, in the order of their ids.

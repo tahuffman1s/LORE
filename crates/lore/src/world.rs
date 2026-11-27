@@ -23,6 +23,9 @@ use crate::shooting::Shooting;
 use crate::sound_output::SoundAsk;
 
 mod bodies;
+mod bot;
+#[cfg(test)]
+mod bot_plays;
 mod climate;
 mod fluids;
 mod ground;
@@ -38,6 +41,7 @@ mod witness;
 
 pub(crate) use bodies::{Body, Dummy, Standing};
 pub use bodies::{DummyId, PlayerInput};
+pub use bot::{BotLine, FINISHED as BOT_FINISHED, TOOK_OVER as BOT_TOOK_OVER};
 pub(crate) use climate::said as said_weather;
 pub(crate) use ground::Ground;
 pub use ground::{WalkCheck, try_walking};
@@ -126,6 +130,11 @@ pub struct World {
     /// tick sets no memory aside.
     usable: Vec<using::Usable>,
     usable_ids: Vec<using::UseKey>,
+    /// The bot, once the script has given it something to do.
+    bot: Option<Box<bot::BotPlay>>,
+    /// Whether a [`Playing`] asks the bot for its input each tick; a bare
+    /// world has nobody to press buttons for it.
+    bot_wired: bool,
     /// Whether the fire button was down on the last tick: a throw is a
     /// press, not a hold.
     fire_was: bool,
@@ -313,6 +322,8 @@ impl World {
             using: using::Using::default(),
             usable: Vec::new(),
             usable_ids: Vec::new(),
+            bot: None,
+            bot_wired: false,
             fire_was: false,
             ladders,
             dodge: Dodge::default(),
@@ -409,6 +420,7 @@ impl World {
         self.ground = ground;
         // Ways found on the old ground, and its door numbers, mean nothing.
         self.npcs.level_changed();
+        self.bot_level_changed();
         // Solid things stand on the new shapes, back where the map has them.
         self.things = Self::things_of(&self.game, &self.ground);
         self.ground.walk_round(&self.things);
@@ -830,6 +842,7 @@ impl Game for World {
     /// (`game.input`); the player moves by what was asked of them
     /// ([`World::ask`]).
     fn tick(&mut self, input: &InputFrame, step: f32) {
+        self.bot_unplayed();
         // Time stood still: only the script runs, so that it hears the
         // player and can start time again. Nothing in the world moves,
         // and what the last tick made is not made again.
@@ -1619,6 +1632,11 @@ pub struct Playing {
     weapon_lengths: std::collections::HashMap<std::rc::Rc<str>, f32>,
     /// The NPCs as they are drawn: never read by the world.
     pub(crate) npc_figures: crate::npc_figures::NpcFigures,
+    /// The input of the tick being run, as the bot pressed it, kept so a
+    /// tick sets no memory aside.
+    bot_frame: InputFrame,
+    /// Whether the newest tick was run from the bot's input.
+    bot_used: bool,
 }
 
 /// How far ahead of its grip a weapon must reach to be held in both hands
@@ -1821,6 +1839,8 @@ impl Playing {
             flying: Vec::new(),
             weapon_lengths: std::collections::HashMap::new(),
             npc_figures: crate::npc_figures::NpcFigures::mannequin(),
+            bot_frame: InputFrame::default(),
+            bot_used: false,
         }
         .with_body_said()
     }
@@ -2406,6 +2426,27 @@ impl Game for Playing {
     }
 
     fn tick(&mut self, input: &InputFrame, step: f32) {
+        // A bot that plays presses the player's buttons: the tick is run
+        // from what it pressed, as from a device.
+        let mut pressed = std::mem::take(&mut self.bot_frame);
+        let view = [self.yaw, self.pitch];
+        self.bot_used = (self.world).bot_frame(input, view, &self.controls, &mut pressed);
+        if self.bot_used {
+            self.tick_by(&pressed, step);
+        } else {
+            self.tick_by(input, step);
+        }
+        self.bot_frame = pressed;
+    }
+
+    fn frame(&mut self, frame: &mut Frame) {
+        self.draw(frame);
+    }
+}
+
+impl Playing {
+    /// Steps the world by one tick of `input`.
+    fn tick_by(&mut self, input: &InputFrame, step: f32) {
         let before = self.eye;
         let mut asked = self
             .controls
@@ -2535,13 +2576,16 @@ impl Game for Playing {
     /// frames are drawn to a tick. Which way the eyes face is as of this
     /// very frame: the newest tick's angles and what the mouse and the
     /// stick have done since.
-    fn frame(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         let (now, tick_rate) = (self.world.tick, self.world.ground.tick_rate);
         // Where this picture is seen from is worked out first, so that the
         // script's HUD, drawn next, can put a piece on a place in the world.
-        let turn = self.controls.look.map_or([0.0; 2], |look| {
-            look::asked(frame.input(), look, frame.since_tick())
-        });
+        // While the bot plays, the person's mouse does not turn the view.
+        let turn = (self.controls.look)
+            .filter(|_| !self.world.bot_drove())
+            .map_or([0.0; 2], |look| {
+                look::asked(frame.input(), look, frame.since_tick())
+            });
         let seen = self.seen_at(frame.alpha(), turn);
         let camera = self.character.as_ref().map_or(seen.eye, |character| {
             character.camera(

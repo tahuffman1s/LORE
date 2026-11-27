@@ -134,6 +134,12 @@ print(who)
 game.difficulty.name = 2 -- wrong: a step is named in text
 print(game.difficulty.scale("hard")) -- wrong: it scales a number
 
+-- The bot is given steps; its plan is not a table, and it plays as the player.
+game.bot.goTo({ "Gate" }) -- wrong: a place is a name, a position, a thing or an NPC
+game.bot.press(1) -- wrong: an action is named in quotes, such as "jump"
+game.bot.playing = true -- wrong: playing is read only; use game.bot.stop() to stop
+game.bot.onStuck("stop") -- wrong: it takes a function
+
 -- The clock's time is text, and its day is counted, not set.
 game.clock.onHour("eight", function() end) -- wrong: the hour is a number
 game.clock.time = true -- wrong: the time is text like "8:00"

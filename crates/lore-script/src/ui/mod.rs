@@ -843,6 +843,14 @@ impl UiState {
             .any(|entry| entry.visible && entry.pauses && !entry.engine)
     }
 
+    /// The file of the first showing screen that pauses the game.
+    pub(crate) fn pausing_screen(&self) -> Option<String> {
+        let inner = self.inner.borrow();
+        (inner.entries.iter())
+            .find(|entry| entry.visible && entry.pauses && !entry.engine)
+            .map(|entry| entry.path.clone())
+    }
+
     /// Notes that the UI paused the game (`true`) or gave it back, and says
     /// what it was before.
     pub(crate) fn set_paused_by_ui(&self, paused: bool) -> bool {
