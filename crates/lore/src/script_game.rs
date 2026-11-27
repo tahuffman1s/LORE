@@ -835,7 +835,9 @@ mod tests {
                 Draw::Rect { .. }
                 | Draw::Turned { .. }
                 | Draw::Box { .. }
-                | Draw::Shadow { .. } => None,
+                | Draw::Shadow { .. }
+                | Draw::Group { .. }
+                | Draw::EndGroup => None,
             })
             .collect()
     }
@@ -902,7 +904,9 @@ mod tests {
                 Draw::Text { .. }
                 | Draw::Turned { .. }
                 | Draw::Box { .. }
-                | Draw::Shadow { .. } => None,
+                | Draw::Shadow { .. }
+                | Draw::Group { .. }
+                | Draw::EndGroup => None,
             })
             .collect()
     }
@@ -1050,7 +1054,9 @@ mod tests {
                 Draw::Text { .. }
                 | Draw::Turned { .. }
                 | Draw::Box { .. }
-                | Draw::Shadow { .. } => None,
+                | Draw::Shadow { .. }
+                | Draw::Group { .. }
+                | Draw::EndGroup => None,
             })
             .collect()
     }
@@ -1118,7 +1124,9 @@ mod tests {
                 Draw::Rect { .. }
                 | Draw::Turned { .. }
                 | Draw::Box { .. }
-                | Draw::Shadow { .. } => None,
+                | Draw::Shadow { .. }
+                | Draw::Group { .. }
+                | Draw::EndGroup => None,
             })
             .unwrap_or_default();
         assert_eq!(said, "Cross");
@@ -1419,7 +1427,9 @@ mod tests {
                 Draw::Rect { .. }
                 | Draw::Turned { .. }
                 | Draw::Box { .. }
-                | Draw::Shadow { .. } => None,
+                | Draw::Shadow { .. }
+                | Draw::Group { .. }
+                | Draw::EndGroup => None,
             })
             .collect();
         rig.list = frame.take_shader_list();

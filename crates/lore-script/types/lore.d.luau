@@ -1330,8 +1330,8 @@ declare extern type HudText with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: ammo.opacity = 0.5
     opacity: number
 
@@ -1354,8 +1354,8 @@ declare extern type HudText with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: ammo.clipTo = panel
     clipTo: HudBox | HudImage | nil
 
@@ -1461,8 +1461,8 @@ declare extern type HudBar with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: bar.opacity = 0.5
     opacity: number
 
@@ -1485,8 +1485,8 @@ declare extern type HudBar with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: bar.clipTo = panel
     clipTo: HudBox | HudImage | nil
 
@@ -1569,8 +1569,8 @@ declare extern type HudBox with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: dot.opacity = 0.5
     opacity: number
 
@@ -1587,8 +1587,8 @@ declare extern type HudBox with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: dot.clipTo = panel
     clipTo: HudBox | HudImage | nil
 
@@ -1695,8 +1695,8 @@ declare extern type HudLine with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: line.opacity = 0.5
     opacity: number
 
@@ -1719,8 +1719,8 @@ declare extern type HudLine with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: line.clipTo = panel
     clipTo: HudBox | HudImage | nil
 
@@ -1788,8 +1788,8 @@ declare extern type HudImage with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: compass.opacity = 0.5
     opacity: number
 
@@ -1806,8 +1806,8 @@ declare extern type HudImage with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: compass.clipTo = panel
     clipTo: HudBox | HudImage | nil
 

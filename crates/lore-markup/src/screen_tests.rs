@@ -369,6 +369,8 @@ fn draw_order_shadow_background_children_outline() {
             Paint::Rect { .. } => "rect",
             Paint::Image { .. } => "image",
             Paint::Text { .. } => "text",
+            Paint::Group { .. } => "group",
+            Paint::EndGroup => "end",
         })
         .collect();
     assert_eq!(kinds, ["shadow", "rect", "rect", "ring"], "{kinds:?}");
@@ -543,7 +545,11 @@ fn overflow_hidden_clips_children_to_the_padding_box() {
     };
     let clip = common.clip.unwrap();
     assert_rect(clip.rect, 5.0, 5.0, 90.0, 90.0);
-    assert!(near(clip.radii[0], 5.0), "{:?}", clip.radii);
+    assert!(
+        near(clip.radii.across[0], 5.0) && near(clip.radii.down[0], 5.0),
+        "{:?}",
+        clip.radii
+    );
 }
 
 #[test]
@@ -870,19 +876,28 @@ fn explicit_body_after_a_bare_link_still_works() {
 }
 
 #[test]
-fn a_percentage_corner_is_round_as_it_always_was() {
-    // What the engine drew before ovals were measured: a percentage is of
-    // the shorter side. Ovals are #612.
+fn a_percentage_corner_is_of_the_width_across_and_the_height_down() {
     let mut s = page(
-        "#a{width:100px;height:100px;border-radius:50%} #b{width:200px;height:100px;border-radius:50%} #c{width:200px;height:100px;border-radius:80% 80% 0 0}",
-        "<div id=a></div><div id=b></div><div id=c></div>",
+        "#a{width:100px;height:100px;border-radius:50%} #b{width:200px;height:100px;border-radius:50%}
+         #c{width:200px;height:100px;border-radius:80% 80% 0 0} #d{width:200px;height:100px;border-radius:30px}",
+        "<div id=a></div><div id=b></div><div id=c></div><div id=d></div>",
     );
     s.frame(&mut TestMeasure);
     let radii = |s: &Screen, name: &str, w: f32, h: f32| {
         crate::paint::radii_of(s.used_style(id(s, name)).unwrap(), w, h)
     };
+    // A square's half is a circle.
     assert_eq!(radii(&s, "a", 100.0, 100.0), [50.0; 4]);
-    assert_eq!(radii(&s, "b", 200.0, 100.0), [50.0; 4]);
-    // 80% of the shorter side, 100, is 80, and 80 + 80 fits the 200 px top.
-    assert_eq!(radii(&s, "c", 200.0, 100.0), [80.0, 80.0, 0.0, 0.0]);
+    // A box twice as wide as high: an ellipse.
+    let b = radii(&s, "b", 200.0, 100.0);
+    assert_eq!((b.across, b.down), ([100.0; 4], [50.0; 4]));
+    // 160 across and 80 down at each top corner: 320 does not fit the 200
+    // px top, so both corners shrink to five eighths, keeping their shape.
+    let c = radii(&s, "c", 200.0, 100.0);
+    assert_eq!(
+        (c.across, c.down),
+        ([100.0, 100.0, 0.0, 0.0], [50.0, 50.0, 0.0, 0.0])
+    );
+    // Pixels are round, whatever the box.
+    assert_eq!(radii(&s, "d", 200.0, 100.0), [30.0; 4]);
 }

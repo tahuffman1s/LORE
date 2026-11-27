@@ -2,8 +2,8 @@
 //!
 //! Nothing here draws. The [`Frame`] it fills is the whole contract with the
 //! drawing layer: rectangles, shadows, pictures and text runs back to front,
-//! each with its transform, opacity and clip, plus the areas that react to
-//! the pointer, front to back.
+//! each with its transform, opacity and clip, groups faded as one, plus the
+//! areas that react to the pointer, front to back.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -76,13 +76,108 @@ impl Rect {
     }
 }
 
-/// A clip: a rectangle with rounded corners, in screen space.
+/// How far each corner reaches across and down, top-left, top-right,
+/// bottom-right, bottom-left. Equal reaches make a round corner, unequal a
+/// quarter of an oval.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Radii {
+    /// How far each corner reaches across.
+    pub across: [f32; 4],
+    /// How far each corner reaches down.
+    pub down: [f32; 4],
+}
+
+impl Radii {
+    /// Every length changed by `change`.
+    pub fn map(self, mut change: impl FnMut(f32) -> f32) -> Self {
+        Radii {
+            across: self.across.map(&mut change),
+            down: self.down.map(&mut change),
+        }
+    }
+}
+
+impl From<[f32; 4]> for Radii {
+    /// Round corners.
+    fn from(radii: [f32; 4]) -> Self {
+        Radii {
+            across: radii,
+            down: radii,
+        }
+    }
+}
+
+impl PartialEq<[f32; 4]> for Radii {
+    fn eq(&self, radii: &[f32; 4]) -> bool {
+        self.across == *radii && self.down == *radii
+    }
+}
+
+/// A clip: a rectangle with rounded corners, moved and turned by its own
+/// transform as the box it belongs to is, so a turned box clips along its
+/// turned edges.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Clip {
-    /// The area kept.
+    /// The area kept, before `transform`.
     pub rect: Rect,
-    /// Corner radii: top-left, top-right, bottom-right, bottom-left.
-    pub radii: [f32; 4],
+    /// Corner radii.
+    pub radii: Radii,
+    /// 2D affine `[a, b, c, d, e, f]`, as [`Common::transform`].
+    pub transform: [f32; 6],
+    /// A straight rectangle on the screen that is kept as well: what is left
+    /// of the clips round this one that are turned another way. `None` is
+    /// everything.
+    pub within: Option<Rect>,
+}
+
+impl Clip {
+    /// Whether the screen point is kept.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        if self.within.is_some_and(|within| !within.contains(x, y)) {
+            return false;
+        }
+        let Some(back) = invert(&self.transform) else {
+            return false;
+        };
+        let [lx, ly] = apply(&back, x, y);
+        inside_rounded(&self.rect, self.radii, lx, ly)
+    }
+}
+
+/// Whether a point is inside a rectangle with corners `radii`.
+pub(crate) fn inside_rounded(rect: &Rect, radii: Radii, x: f32, y: f32) -> bool {
+    if !rect.contains(x, y) {
+        return false;
+    }
+    let (left, top) = (x < rect.x + rect.w / 2.0, y < rect.y + rect.h / 2.0);
+    let corner = match (left, top) {
+        (true, true) => 0,
+        (false, true) => 1,
+        (false, false) => 2,
+        (true, false) => 3,
+    };
+    // A round corner is kept to half the shorter side, an oval one to half
+    // of each side.
+    let shorter = rect.w.min(rect.h) / 2.0;
+    let round = radii.across[corner] == radii.down[corner];
+    let across = radii.across[corner].clamp(0.0, if round { shorter } else { rect.w / 2.0 });
+    let down = radii.down[corner].clamp(0.0, if round { shorter } else { rect.h / 2.0 });
+    if across <= 0.0 || down <= 0.0 {
+        return true;
+    }
+    let cx = if left {
+        rect.x + across
+    } else {
+        rect.right() - across
+    };
+    let cy = if top {
+        rect.y + down
+    } else {
+        rect.bottom() - down
+    };
+    let (dx, dy) = ((x - cx) / across, (y - cy) / down);
+    let in_corner = (dx < 0.0) == left && (dy < 0.0) == top;
+    !in_corner || dx * dx + dy * dy <= 1.0
 }
 
 /// What every paint carries.
@@ -90,7 +185,9 @@ pub struct Clip {
 pub struct Common {
     /// 2D affine `[a, b, c, d, e, f]`: `x' = a*x + c*y + e`, `y' = b*x + d*y + f`.
     pub transform: [f32; 6],
-    /// 0 to 1, already multiplied down the tree.
+    /// 0 to 1, already multiplied down the tree: what a drawer that does
+    /// not draw [`Paint::Group`]s as one picture multiplies colours by. One
+    /// that does uses the groups instead.
     pub opacity: f32,
     /// Where drawing may happen.
     pub clip: Option<Clip>,
@@ -160,8 +257,8 @@ pub enum Paint {
     Shadow {
         /// The box that casts it (its border box, or padding box when inset).
         rect: Rect,
-        /// Corner radii: top-left, top-right, bottom-right, bottom-left.
-        radii: [f32; 4],
+        /// Corner radii.
+        radii: Radii,
         /// Offset in pixels.
         offset: [f32; 2],
         /// Blur radius.
@@ -180,8 +277,8 @@ pub enum Paint {
     Rect {
         /// The border box.
         rect: Rect,
-        /// Corner radii: top-left, top-right, bottom-right, bottom-left.
-        radii: [f32; 4],
+        /// Corner radii.
+        radii: Radii,
         /// Inside.
         fill: Fill,
         /// Border widths: top, right, bottom, left.
@@ -227,6 +324,15 @@ pub enum Paint {
         /// Transform, opacity, clip.
         common: Common,
     },
+    /// The paints up to the matching [`Paint::EndGroup`] are one picture,
+    /// laid over what is behind at `opacity`: an element whose `opacity` is
+    /// below 1, with everything in it.
+    Group {
+        /// The element's own opacity, 0 to 1.
+        opacity: f32,
+    },
+    /// The end of the last group begun.
+    EndGroup,
 }
 
 /// An area that reacts to the pointer.
@@ -345,23 +451,52 @@ pub(crate) fn bbox(m: &[f32; 6], r: &Rect) -> Rect {
     }
 }
 
-fn plain(m: &[f32; 6]) -> bool {
-    m[0] == 1.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 1.0
+/// A clip to `rect`, with round corners `radii`, moved by `m`.
+fn clip_to(m: [f32; 6], rect: Rect, radii: Radii) -> Clip {
+    Clip {
+        rect,
+        radii,
+        transform: m,
+        within: None,
+    }
 }
 
+/// What is inside both `a` and `b`, `b` being inside `a`. Clips turned the
+/// same way meet exactly. When `a` is turned another way, `b` is kept as it
+/// is and only the straight box round `a` on the screen is kept of `a`,
+/// which is exact when `a` is straight with square corners.
 fn intersect_clip(a: Option<Clip>, b: Clip) -> Clip {
-    match a {
-        None => b,
-        Some(a) => {
-            let rect = a.rect.intersect(&b.rect);
-            let radii = if rect == b.rect {
-                b.radii
-            } else if rect == a.rect {
-                a.radii
-            } else {
-                [0.0; 4]
-            };
-            Clip { rect, radii }
+    let Some(a) = a else {
+        return b;
+    };
+    let within = |extra: Option<Rect>| match (a.within, extra) {
+        (Some(one), Some(other)) => Some(one.intersect(&other)),
+        (one, other) => one.or(other),
+    };
+    if a.transform == b.transform {
+        let rect = a.rect.intersect(&b.rect);
+        let radii = if rect == b.rect {
+            b.radii
+        } else if rect == a.rect {
+            a.radii
+        } else {
+            Radii::default()
+        };
+        Clip {
+            rect,
+            radii,
+            transform: b.transform,
+            within: within(b.within),
+        }
+    } else {
+        let round_a = bbox(&a.transform, &a.rect);
+        let kept = within(Some(round_a));
+        Clip {
+            within: match (kept, b.within) {
+                (Some(one), Some(other)) => Some(one.intersect(&other)),
+                (one, other) => one.or(other),
+            },
+            ..b
         }
     }
 }
@@ -442,49 +577,62 @@ pub(crate) fn build(
     }
 }
 
-/// The radius of each corner, top-left, top-right, bottom-right,
-/// bottom-left. A percentage is of the box's shorter side, so on a box that
-/// is not square it is drawn round (ovals are #612). Neighbouring radii may
-/// not overlap along a side: when they would, all are scaled down together.
-pub(crate) fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> [f32; 4] {
-    let basis = w.min(h);
-    let mut r = [
-        cs.border_top_left_radius.resolve(basis).max(0.0),
-        cs.border_top_right_radius.resolve(basis).max(0.0),
-        cs.border_bottom_right_radius.resolve(basis).max(0.0),
-        cs.border_bottom_left_radius.resolve(basis).max(0.0),
+/// How far each corner reaches across and down. A percentage is of the
+/// box's width across and of its height down, so `50%` on a box that is not
+/// square is an ellipse. Neighbouring corners may not overlap along a side:
+/// when they would, all are scaled down together, keeping their shapes.
+pub(crate) fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> Radii {
+    let corners = [
+        cs.border_top_left_radius,
+        cs.border_top_right_radius,
+        cs.border_bottom_right_radius,
+        cs.border_bottom_left_radius,
     ];
+    let mut r = Radii {
+        across: corners.map(|c| c.resolve(w).max(0.0)),
+        down: corners.map(|c| c.resolve(h).max(0.0)),
+    };
+    let (x, y) = (r.across, r.down);
     let mut f = 1.0f32;
     for (sum, side) in [
-        (r[0] + r[1], w),
-        (r[1] + r[2], h),
-        (r[2] + r[3], w),
-        (r[3] + r[0], h),
+        (x[0] + x[1], w),
+        (y[1] + y[2], h),
+        (x[2] + x[3], w),
+        (y[3] + y[0], h),
     ] {
         if sum > side && sum > 0.0 {
             f = f.min(side / sum);
         }
     }
     if f < 1.0 {
-        for v in &mut r {
-            *v *= f;
-        }
+        r = r.map(|v| v * f);
     }
     r
 }
 
-fn shrink_radii(r: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+/// The corners of the box inside the border: each pulled in on both axes by
+/// the wider of the two borders it joins, so round corners stay round.
+fn shrink_radii(r: Radii, b: [f32; 4]) -> Radii {
     // b is top, right, bottom, left; corners are tl, tr, br, bl.
-    [
-        (r[0] - b[0].max(b[3])).max(0.0),
-        (r[1] - b[0].max(b[1])).max(0.0),
-        (r[2] - b[2].max(b[1])).max(0.0),
-        (r[3] - b[2].max(b[3])).max(0.0),
-    ]
+    let by = [
+        b[0].max(b[3]),
+        b[0].max(b[1]),
+        b[2].max(b[1]),
+        b[2].max(b[3]),
+    ];
+    let pull = |v: [f32; 4]| std::array::from_fn(|i| (v[i] - by[i]).max(0.0));
+    Radii {
+        across: pull(r.across),
+        down: pull(r.down),
+    }
 }
 
-fn grow_radii(r: [f32; 4], d: f32) -> [f32; 4] {
-    r.map(|v| if v > 0.0 { v + d } else { 0.0 })
+fn grow_radii(r: Radii, d: f32) -> Radii {
+    let grow = |v: [f32; 4]| v.map(|v| if v > 0.0 { v + d } else { 0.0 });
+    Radii {
+        across: grow(r.across),
+        down: grow(r.down),
+    }
 }
 
 fn with_alpha(c: Color, k: f32) -> Color {
@@ -571,6 +719,7 @@ impl Painter<'_, '_> {
         if let Some(n) = self.nodes.get_mut(i) {
             n.rect = brect;
             n.matrix = m;
+            n.cut = pc.clip;
         }
 
         // Hit area before the element's own paints and children, so the list
@@ -589,6 +738,14 @@ impl Painter<'_, '_> {
             });
         }
 
+        // An element that fades fades as one picture, with all that is in
+        // it, so its parts do not show through each other.
+        let group = opacity > 0.0 && cs.opacity < 1.0;
+        if group {
+            self.frame.paints.push(Paint::Group {
+                opacity: cs.opacity,
+            });
+        }
         if visible {
             self.own_paints(cs, brect, prect, radii, b, &self_common);
         }
@@ -596,14 +753,9 @@ impl Painter<'_, '_> {
         // Clip and scroll of the content.
         let clips = cs.overflow_x != Overflow::Visible || cs.overflow_y != Overflow::Visible;
         let child_clip = if clips {
-            let inner = shrink_radii(radii, b);
-            let rect = bbox(&m, &prect);
             Some(intersect_clip(
                 pc.clip,
-                Clip {
-                    rect,
-                    radii: if plain(&m) { inner } else { [0.0; 4] },
-                },
+                clip_to(m, prect, shrink_radii(radii, b)),
             ))
         } else {
             pc.clip
@@ -686,6 +838,9 @@ impl Painter<'_, '_> {
             self.scroll_bars(cs, &layout, scroll, prect, radii, b, &self_common);
             self.outline(el, cs, brect, radii, &self_common);
         }
+        if group {
+            self.frame.paints.push(Paint::EndGroup);
+        }
     }
 
     fn own_paints(
@@ -693,7 +848,7 @@ impl Painter<'_, '_> {
         cs: &ComputedStyle,
         brect: Rect,
         prect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         b: [f32; 4],
         common: &Common,
     ) {
@@ -799,7 +954,7 @@ impl Painter<'_, '_> {
         name: Atom,
         cs: &ComputedStyle,
         prect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         b: [f32; 4],
         common: &Common,
     ) {
@@ -852,14 +1007,7 @@ impl Painter<'_, '_> {
         let picture = self.frame.push_text(pname);
         let clip = intersect_clip(
             common.clip,
-            Clip {
-                rect: bbox(&common.transform, &prect),
-                radii: if plain(&common.transform) {
-                    shrink_radii(radii, b)
-                } else {
-                    [0.0; 4]
-                },
-            },
+            clip_to(common.transform, prect, shrink_radii(radii, b)),
         );
         self.frame.paints.push(Paint::Image {
             rect,
@@ -1045,6 +1193,7 @@ impl Painter<'_, '_> {
         if let Some(n) = self.nodes.get_mut(i) {
             n.rect = rect;
             n.matrix = pc.m;
+            n.cut = pc.clip;
         }
         let common = Common {
             transform: pc.m,
@@ -1126,7 +1275,7 @@ impl Painter<'_, '_> {
                             w: p.w,
                             h: seg.asc + seg.desc,
                         },
-                        radii: [0.0; 4],
+                        radii: Radii::default(),
                         fill: Fill::Color(bg),
                         border_widths: [0.0; 4],
                         border_colors: [[0.0; 4]; 4],
@@ -1166,7 +1315,7 @@ impl Painter<'_, '_> {
         cs: &ComputedStyle,
         c: Control,
         crect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         common: &Common,
     ) {
         let doc = self.cx.env.doc;
@@ -1209,10 +1358,7 @@ impl Painter<'_, '_> {
                 let baseline = crect.y + (crect.h - lh) / 2.0 + (lh - (asc + desc)) / 2.0 + asc;
                 let clip = intersect_clip(
                     common.clip,
-                    Clip {
-                        rect: bbox(&common.transform, &crect),
-                        radii: [0.0; 4],
-                    },
+                    clip_to(common.transform, crect, Radii::default()),
                 );
                 self.text_run(cs, [crect.x + x, baseline], text, color, Some(clip), common);
             }
@@ -1227,7 +1373,7 @@ impl Painter<'_, '_> {
                     };
                     self.frame.paints.push(Paint::Rect {
                         rect,
-                        radii: [2.0; 4],
+                        radii: [2.0; 4].into(),
                         fill: Fill::Color(cs.accent_color),
                         border_widths: [0.0; 4],
                         border_colors: [[0.0; 4]; 4],
@@ -1267,7 +1413,7 @@ impl Painter<'_, '_> {
         layout: &taffy::Layout,
         scroll: [f32; 2],
         prect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         b: [f32; 4],
         common: &Common,
     ) {
@@ -1327,7 +1473,7 @@ impl Painter<'_, '_> {
             if track[3] > 0.0 {
                 self.frame.paints.push(Paint::Rect {
                     rect: track_rect,
-                    radii: r,
+                    radii: r.into(),
                     fill: Fill::Color(track),
                     border_widths: [0.0; 4],
                     border_colors: [[0.0; 4]; 4],
@@ -1336,7 +1482,7 @@ impl Painter<'_, '_> {
             }
             self.frame.paints.push(Paint::Rect {
                 rect: thumb_rect,
-                radii: r,
+                radii: r.into(),
                 fill: Fill::Color(thumb),
                 border_widths: [0.0; 4],
                 border_colors: [[0.0; 4]; 4],
@@ -1350,7 +1496,7 @@ impl Painter<'_, '_> {
         el: ElementId,
         cs: &ComputedStyle,
         brect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         common: &Common,
     ) {
         let (mut width, mut offset, mut color) =

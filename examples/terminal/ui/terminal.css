@@ -36,7 +36,7 @@ body {
 }
 .step .far { margin-left: auto; flex-shrink: 0; font-size: 16px; white-space: nowrap; }
 .step.now { color: var(--ink); }
-.step.now .box { border-color: var(--ink); box-shadow: 0 0 10px var(--ink); animation: pulse 1.4s ease-in-out infinite; }
+.step.now .box { border-color: var(--ink); box-shadow: 0 0 10px var(--ink), inset 0 0 6px var(--ink); animation: pulse 1.4s ease-in-out infinite; }
 .step.done .box { background-color: var(--ink-dim); }
 
 /* ---------- menus: the pause, pack and settings screens ---------- */

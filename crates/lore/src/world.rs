@@ -3171,7 +3171,9 @@ mod tests {
                     Draw::Rect { .. }
                     | Draw::Turned { .. }
                     | Draw::Box { .. }
-                    | Draw::Shadow { .. } => None,
+                    | Draw::Shadow { .. }
+                    | Draw::Group { .. }
+                    | Draw::EndGroup => None,
                 })
                 .collect()
         };
@@ -3394,7 +3396,9 @@ mod tests {
                     Draw::Rect { .. }
                     | Draw::Turned { .. }
                     | Draw::Box { .. }
-                    | Draw::Shadow { .. } => None,
+                    | Draw::Shadow { .. }
+                    | Draw::Group { .. }
+                    | Draw::EndGroup => None,
                 })
                 .collect()
         }
@@ -3631,7 +3635,9 @@ mod tests {
                     Draw::Rect { .. }
                     | Draw::Turned { .. }
                     | Draw::Box { .. }
-                    | Draw::Shadow { .. } => None,
+                    | Draw::Shadow { .. }
+                    | Draw::Group { .. }
+                    | Draw::EndGroup => None,
                 })
                 .collect()
         }

@@ -871,7 +871,8 @@ impl Headless {
                 let read = self
                     .shaders
                     .record_screen(self.commands, 0, &self.view, camera);
-                self.ui.prepare(self.commands, 0, &mut self.overlay)?;
+                self.ui
+                    .prepare(self.commands, 0, &mut self.overlay, self.extent)?;
                 self.tonemap.record(
                     self.commands,
                     Canvas {
@@ -3477,7 +3478,7 @@ mod tests {
         buffer.push(Draw::Box {
             position: [10.0, 40.0],
             size: [120.0, 20.0],
-            radii: [10.0, 0.0, 0.0, 10.0],
+            radii: [10.0, 0.0, 0.0, 10.0].into(),
             fill: Fill::Image {
                 image: 0,
                 tint: Color::WHITE,
@@ -3537,7 +3538,7 @@ mod tests {
         buffer.push(Draw::Box {
             position: [0.0, 20.0],
             size: [192.0, 60.0],
-            radii: [0.0; 4],
+            radii: [0.0; 4].into(),
             fill: Fill::Color(Color { a: 1.0, ..nothing }),
             border_widths: [0.0; 4],
             border_color: nothing,
@@ -3549,7 +3550,7 @@ mod tests {
         buffer.push(Draw::Box {
             position: [10.0, 40.5],
             size: [120.0, 20.0],
-            radii: [0.0; 4],
+            radii: [0.0; 4].into(),
             fill: Fill::Color(nothing),
             border_widths: [0.0, 0.0, 4.0, 0.0],
             border_color: Color::WHITE,

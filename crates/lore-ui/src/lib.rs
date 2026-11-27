@@ -86,7 +86,7 @@ mod ui;
 pub use build::ScreenBuilder;
 pub use draw::{Draw, DrawBuffer, DrawIter, DrawList};
 pub use error::UiError;
-pub use fill::{Clip, Fill, FontFace, Stop, Transform};
+pub use fill::{Clip, Fill, FontFace, Radii, Stop, Transform};
 pub use hud_style::{BoxShadow, Gradient, HudStyle, MOST_STOPS, TextShadow};
 pub use input::{Direction, InputMode, UiInput};
 pub use layout::{hud_area, hud_line, hud_text_size, hud_text_size_styled};

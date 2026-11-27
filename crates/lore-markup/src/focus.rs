@@ -28,10 +28,10 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::css::value::{Nav, Overflow, Positioning, Visibility};
+use crate::css::value::{Nav, Overflow, Visibility};
 use crate::dom::{Dirty, ElementId, HandlerKind, InputType, Node, NodeKind, Tag};
 use crate::layout::TextMeasure;
-use crate::paint::{Rect, apply, bbox, invert, is_interactive};
+use crate::paint::{Rect, apply, bbox, inside_rounded, invert, is_interactive, radii_of};
 use crate::screen::Screen;
 use crate::style::{ComputedStyle, Display};
 
@@ -444,7 +444,7 @@ impl Screen {
         if let Some([x, y]) = self.ix.pointer
             && self.ix.pressed.is_none()
         {
-            let hit = self.pick(0, x, y, None);
+            let hit = self.pick(0, x, y);
             if hit != self.ix.hover {
                 self.set_hover(hit);
                 changed = true;
@@ -742,26 +742,13 @@ impl Screen {
 
     // ----- pointer ---------------------------------------------------------
 
-    fn pick(&self, i: usize, x: f32, y: f32, clip: Option<Rect>) -> Option<ElementId> {
+    /// The deepest element under the screen point, front first: the
+    /// pointer is cut by the same clips as the picture, turned as they
+    /// are, and an element is hit where its turned shape, round corners
+    /// and all, is drawn.
+    fn pick(&self, i: usize, x: f32, y: f32) -> Option<ElementId> {
         let n = self.layout.nodes.get(i)?;
         let el = n.element;
-        // A fixed box is not cut by the containers it sits in.
-        let fixed = el
-            .and_then(|e| self.style_of(e))
-            .is_some_and(|cs| cs.position == Positioning::Fixed);
-        let clip = if fixed { None } else { clip };
-        if clip.is_some_and(|c| !c.contains(x, y)) {
-            return None;
-        }
-        let clips = el.and_then(|e| self.style_of(e)).is_some_and(|cs| {
-            cs.overflow_x != Overflow::Visible || cs.overflow_y != Overflow::Visible
-        });
-        let child_clip = if clips {
-            let b = bbox(&n.matrix, &n.rect);
-            Some(clip.map_or(b, |c| c.intersect(&b)))
-        } else {
-            clip
-        };
         let z = |c: u32| {
             self.layout
                 .nodes
@@ -773,7 +760,7 @@ impl Screen {
         };
         if n.children.iter().all(|&c| z(c) == 0) {
             for &c in n.children.iter().rev() {
-                if let Some(h) = self.pick(c as usize, x, y, child_clip) {
+                if let Some(h) = self.pick(c as usize, x, y) {
                     return Some(h);
                 }
             }
@@ -781,10 +768,13 @@ impl Screen {
             let mut kids: Vec<(i32, u32)> = n.children.iter().map(|&c| (z(c), c)).collect();
             kids.sort_by_key(|k| k.0);
             for &(_, c) in kids.iter().rev() {
-                if let Some(h) = self.pick(c as usize, x, y, child_clip) {
+                if let Some(h) = self.pick(c as usize, x, y) {
                     return Some(h);
                 }
             }
+        }
+        if n.cut.is_some_and(|c| !c.contains(x, y)) {
+            return None;
         }
         let e = el?;
         let cs = self.style_of(e)?;
@@ -793,7 +783,8 @@ impl Screen {
         }
         let inv = invert(&n.matrix)?;
         let p = apply(&inv, x, y);
-        n.rect.contains(p[0], p[1]).then_some(e)
+        let radii = radii_of(cs, n.rect.w, n.rect.h);
+        inside_rounded(&n.rect, radii, p[0], p[1]).then_some(e)
     }
 
     /// The nearest element at or above `from` that does something when
@@ -818,7 +809,7 @@ impl Screen {
     /// The pointer moved to `(x, y)` in screen pixels.
     pub fn pointer_move(&mut self, x: f32, y: f32) {
         self.ix.pointer = Some([x, y]);
-        let hit = self.pick(0, x, y, None);
+        let hit = self.pick(0, x, y);
         self.set_hover(hit);
         if let Some(p) = self.ix.pressed.filter(|p| p.drag) {
             self.drag_to(p.element, x);
