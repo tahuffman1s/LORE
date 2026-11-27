@@ -1081,7 +1081,82 @@ declare extern type Npc extends Character with
     --- is gone.
     --- Example: for _, who in guard:inSight() do print(guard.name .. " sees " .. who.name) end
     function inSight(self): { Character }
+
+    --- What the NPC is most aware of anyone or anything. Read only:
+    --- "unaware", "curious" (something is there: it turns to look),
+    --- "searching" (someone was there: it knows where they were last seen
+    --- or heard) or "alarmed" (it sees them). Its senses fill it bit by
+    --- bit: an enemy standing in plain view 5 metres away alarms it in about
+    --- a second, one sprinting across its view 20 metres off only sets it
+    --- searching, a glimpse in the dark is slow. A noise makes it curious
+    --- or searching but never alarmed; a shot heard at all makes it curious
+    --- at once, and searching if it was in the open or near. It falls slowly
+    --- once nothing new is sensed: alarmed about 5 seconds after it last
+    --- saw them, searching till 16 seconds, curious till 24 seconds, then
+    --- unaware. Only an enemy (`game.sides`, or someone it holds a grudge
+    --- against) is searched for or alarms it. Someone it is neutral about
+    --- (anyone, in a game with no `game.sides`) is at most "curious": it
+    --- looks at them with its head and chest, not its feet, and is unaware
+    --- again about 3 seconds after they go. A friend is never more than
+    --- noticed. How fast the player is noticed follows `game.difficulty`.
+    --- Example: if guard.awareness == "alarmed" then print("The guard is on to someone") end
+    awareness: NpcAwareness
+
+    --- How quickly the NPC notices: 1, as a person does, until the script
+    --- says otherwise; 0.5 is a sleepy guard, 2 a watchful one, 0 never
+    --- notices anything; up to 10. Not the same as `awareness`: this is how
+    --- fast it fills, that is how far it has got.
+    --- Example: guard.alertness = 0.5
+    alertness: number
+
+    --- How aware the NPC is of `who`: "unaware", "curious", "searching" or
+    --- "alarmed" (see `awareness`). Whether `who` is an enemy is a
+    --- separate question: `guard:feelsAbout(who)`.
+    --- Example: if guard:awarenessOf(game.player) == "searching" then print("Who's there?") end
+    function awarenessOf(self, who: Character): NpcAwareness
+
+    --- How much the NPC has noticed `who`, from 0 (nothing) to 1
+    --- (alarmed): the number under `awarenessOf`, to draw a meter of the
+    --- game's own. It reaches 0.25 at "curious" and 0.6 at "searching".
+    --- For the game's rules, `awarenessOf` is the one to read; this is for
+    --- drawing.
+    --- Example: meter.value = guard:noticeOf(game.player)
+    function noticeOf(self, who: Character): number
+
+    --- Calls `handler` each time how aware the NPC is of someone, or of a
+    --- place, changes: `who` is who it is about, or nil when it is a place
+    --- (a noise nobody made, a body found lying there, a place passed to
+    --- `alert`); `now` and `before` are the levels (see `awareness`);
+    --- `place` is where they, or it, were last seen or heard, for the NPC to
+    --- go and look; it is never nil. Several steps at once are told as one change: someone
+    --- close by goes from "unaware" to "alarmed". Falling, it goes one step
+    --- at a time. Called in the game's tick, NPCs in the order they were
+    --- made. `lore check` tells it of pretend changes: curious, searching,
+    --- alarmed about the player and back down a step at a time, then a
+    --- shot heard at a place, searched for, and given up. When the script is saved it runs
+    --- again, and this function replaces the old one; the NPC is kept.
+    --- Example: guard:onAwareness(function(who, now, before, place) if now == "alarmed" and who == game.player then print("Halt!") end end)
+    function onAwareness(self, handler: (who: Character?, now: NpcAwareness, before: NpcAwareness, place: vector) -> ()): ()
+
+    --- Alarms the NPC about `who`, wherever they are, or about a place: a
+    --- bell rung, a cutscene. From the next tick it is "alarmed", and falls
+    --- from there as if it had just seen them. `who` need not be an enemy:
+    --- until it is calm again, it treats them as one. It always needs
+    --- someone or a place; `calm()` with nothing settles it about everyone.
+    --- Example: guard:alert(game.player)
+    --- Example: guard:alert(game.thing("Bell").position)
+    function alert(self, about: Character | vector): ()
+
+    --- Settles the NPC at once, about everyone and everything, or only
+    --- about `who`: it is "unaware" from the next tick, and `onAwareness`
+    --- is told. It still has its senses: an enemy it still sees alarms it
+    --- again in about a second, so calm it once the enemy is out of sight.
+    --- Example: guard:calm()
+    function calm(self, who: Character?): ()
 end
+
+--- How aware an NPC is of someone: `npc.awareness`, `npc:awarenessOf`.
+type NpcAwareness = "unaware" | "curious" | "searching" | "alarmed"
 
 --- A noise the game made: what a `game.onNoise` function is handed.
 --- Example: game.onNoise(function(noise) if noise.byPlayer and noise.loudness > 0.5 then print("Heard " .. noise.sound) end end)
@@ -1228,9 +1303,9 @@ end
 
 --- What `game.npc { ... }` takes to make an NPC. `side` is the side it
 --- is on, as `game.sides` names it; nil for none. `sightDistance`,
---- `sightAngle`, `hearing` and `nightSight` set its senses, as the NPC's
---- fields of the same names do.
-type NpcOptions = { name: string, at: string | vector | Thing, facing: number?, side: string?, sightDistance: number?, sightAngle: number?, hearing: number?, nightSight: number? }
+--- `sightAngle`, `hearing`, `nightSight` and `alertness` set its senses,
+--- as the NPC's fields of the same names do.
+type NpcOptions = { name: string, at: string | vector | Thing, facing: number?, side: string?, sightDistance: number?, sightAngle: number?, hearing: number?, nightSight: number?, alertness: number? }
 
 --- How an NPC walks to a place (`npc:goTo`): `run` to run, `within` how
 --- close is there in metres, `facing` the way to face on arriving
@@ -3131,6 +3206,17 @@ declare game: {
     --- `game.player.lookingAt` and `game.player.useProgress`.
     --- Example: game.showUsePrompt(false)
     showUsePrompt: (shown: boolean) -> (),
+
+    --- Draws a mark over each NPC noticing the player that counts them an
+    --- enemy (four at most, the most aware first; none over a friend, nor
+    --- over one only curious about a stranger): a pill that fills as the
+    --- NPC notices them more,
+    --- with "?" over it once the NPC is searching and "!" once it is
+    --- alarmed; for an NPC off the screen, at the edge in its direction.
+    --- Off until a script switches it on. A game drawing its own reads
+    --- `npc:noticeOf(game.player)` in `game.onDraw`.
+    --- Example: game.showNoticeMarks(true)
+    showNoticeMarks: (shown: boolean) -> (),
 
     --- A kind of fluid, by name; it is made the first time it is asked for.
     --- Names are trimmed and in lower case ("Honey" is "honey"). Kind "water"

@@ -975,6 +975,37 @@ impl UserData for CharacterRef {
             this.read(lua, "inSight")?;
             crate::npc_api::in_sight(lua, this.0)
         });
+        // What an NPC has noticed (#56).
+        methods.add_function("awarenessOf", |lua, (this, who): (Value, Value)| {
+            let this = npc_receiver(lua, &this, "awarenessOf", "(game.player)")?;
+            this.read(lua, "awarenessOf")?;
+            crate::npc_api::awareness_of(lua, this.0, &who)
+        });
+        methods.add_function("noticeOf", |lua, (this, who): (Value, Value)| {
+            let this = npc_receiver(lua, &this, "noticeOf", "(game.player)")?;
+            this.read(lua, "noticeOf")?;
+            crate::npc_api::notice_of(lua, this.0, &who)
+        });
+        methods.add_function("onAwareness", |lua, (this, handler): (Value, Value)| {
+            let this = npc_receiver(
+                lua,
+                &this,
+                "onAwareness",
+                "(function(who, now, before, place) end)",
+            )?;
+            this.read(lua, "onAwareness")?;
+            crate::npc_api::on_awareness(lua, this.0, handler)
+        });
+        methods.add_function("alert", |lua, (this, about): (Value, Value)| {
+            let this = npc_receiver(lua, &this, "alert", "(game.player)")?;
+            this.read(lua, "alert")?;
+            crate::npc_api::alert(lua, this.0, &about)
+        });
+        methods.add_function("calm", |lua, (this, about): (Value, Value)| {
+            let this = npc_receiver(lua, &this, "calm", "()")?;
+            this.read(lua, "calm")?;
+            crate::npc_api::calm(lua, this.0, &about)
+        });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;
             Ok(this

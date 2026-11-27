@@ -50,6 +50,7 @@ pub struct ScriptGame {
     hud: ScriptHud,
     /// The prompt for a thing the player can use.
     use_prompt: crate::use_prompt::UsePrompt,
+    notice_marks: crate::notice_marks::NoticeMarks,
     /// The sounds the script can play by name.
     sounds: Sounds,
     /// The pictures the script can show on its HUD.
@@ -150,6 +151,7 @@ impl ScriptGame {
             notice: None,
             hud: ScriptHud::measuring(fonts.measuring()),
             use_prompt: crate::use_prompt::UsePrompt::default(),
+            notice_marks: crate::notice_marks::NoticeMarks::default(),
             sounds: Sounds::starter(),
             pictures: crate::hud_images::HudPictures::default(),
             fonts,
@@ -397,6 +399,7 @@ impl ScriptGame {
             notice: None,
             hud: ScriptHud::measuring(fonts.measuring()),
             use_prompt: crate::use_prompt::UsePrompt::default(),
+            notice_marks: crate::notice_marks::NoticeMarks::default(),
             sounds: Sounds::in_folder(folder),
             pictures: crate::hud_images::HudPictures::in_folder(folder),
             fonts,
@@ -760,6 +763,8 @@ impl Game for ScriptGame {
         self.hud.show(&mut self.host, frame);
         // Over the game's own HUD, under any error.
         self.use_prompt.show(&self.host, frame);
+        // The marks over the NPCs noticing the player, when switched on.
+        self.notice_marks.show(&self.host, frame);
         // The game's screens, written in HTML and CSS: over the HUD, under any
         // error.
         let [across, down] = frame.screen_size();

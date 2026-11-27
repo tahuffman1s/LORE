@@ -44,6 +44,9 @@ pub(crate) const NPC_FIELDS: &[&str] = &[
     "sightAngle",
     "hearing",
     "nightSight",
+    // What it has noticed (#56).
+    "awareness",
+    "alertness",
 ];
 
 /// What an NPC can be asked, besides what every character can.
@@ -61,6 +64,12 @@ pub(crate) const NPC_METHODS: &[&str] = &[
     "onHear",
     "canSee",
     "inSight",
+    // What it has noticed (#56).
+    "awarenessOf",
+    "noticeOf",
+    "onAwareness",
+    "alert",
+    "calm",
 ];
 
 /// What `game.npc { ... }` takes.
@@ -73,11 +82,18 @@ const NPC_OPTIONS: &[&str] = &[
     "sightAngle",
     "hearing",
     "nightSight",
+    "alertness",
 ];
 
 /// The options of `game.npc { ... }` that set its senses: each is also a
 /// field of the NPC, by the same name.
-const SENSE_OPTIONS: [&str; 4] = ["sightDistance", "sightAngle", "hearing", "nightSight"];
+const SENSE_OPTIONS: [&str; 5] = [
+    "sightDistance",
+    "sightAngle",
+    "hearing",
+    "nightSight",
+    "alertness",
+];
 
 /// The kind of map entity that is an NPC.
 pub const NPC_KIND: &str = "npc";
@@ -118,6 +134,9 @@ pub struct NpcSenses {
     pub hearing: f32,
     /// How well it sees in the dark, from 0 (as a person) to 1 (as by day).
     pub night_sight: f32,
+    /// How quickly it notices (#56): 1 as a person does, 0.5 a sleepy
+    /// guard, 0 never.
+    pub alertness: f32,
 }
 
 impl Default for NpcSenses {
@@ -128,8 +147,34 @@ impl Default for NpcSenses {
             sight_angle: 120.0,
             hearing: 1.0,
             night_sight: 0.0,
+            alertness: 1.0,
         }
     }
+}
+
+/// The most alert an NPC can be set to be.
+const MOST_ALERT: f32 = 10.0;
+
+/// What a script asked of what an NPC has noticed (`npc:alert`,
+/// `npc:calm`), for the engine to do on its tick.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AwareAsk {
+    /// Raise the alarm: about someone, wherever they are, or about a place.
+    Alert {
+        /// The NPC.
+        npc: CharacterId,
+        /// Who it is alarmed about: `None` for the place `at`.
+        about: Option<CharacterId>,
+        /// The place, when it is about one.
+        at: [f32; 3],
+    },
+    /// Settle it: about someone, or about everyone and everything.
+    Calm {
+        /// The NPC.
+        npc: CharacterId,
+        /// Who it is calmed about: `None` for all.
+        about: Option<CharacterId>,
+    },
 }
 
 /// The furthest an NPC can be set to see, in metres.
@@ -235,6 +280,11 @@ pub(crate) struct NpcState {
     /// Who each NPC sees now, as the engine last told: (NPC, who), for
     /// `npc:canSee`.
     in_view: RefCell<Vec<(CharacterId, CharacterId)>>,
+    /// What each NPC has noticed, as the engine last told, in the order of
+    /// their ids: for `npc:awarenessOf` and the like.
+    aware: RefCell<Vec<(CharacterId, lore_npc::Awareness<CharacterId>)>>,
+    /// What scripts asked of what NPCs noticed, not yet taken.
+    aware_asks: RefCell<Vec<AwareAsk>>,
 }
 
 /// What one NPC was made with, or found as, while a version of the script
@@ -282,6 +332,9 @@ pub(crate) struct NpcVersion {
     said: RefCell<HashMap<CharacterId, Said>>,
     /// The NPCs this version's file made or found as it loaded, in order.
     loaded: RefCell<Vec<Loaded>>,
+    /// Whether the engine draws its marks over the NPCs noticing the player
+    /// (`game.showNoticeMarks`).
+    marks: std::cell::Cell<bool>,
 }
 
 impl NpcState {
@@ -396,6 +449,7 @@ impl NpcState {
         drop(entries);
         self.ask(NpcAsk::Removed { id });
         (self.in_view.borrow_mut()).retain(|&(npc, who)| npc != id && who != id);
+        self.aware.borrow_mut().retain(|(npc, _)| *npc != id);
         true
     }
 
@@ -410,6 +464,46 @@ impl NpcState {
             }
             _ => {}
         }
+    }
+
+    /// Notes what the NPC `npc` has noticed now. Sets no memory aside once
+    /// the NPC has been told of before.
+    pub(crate) fn set_aware(&self, npc: CharacterId, now: &lore_npc::Awareness<CharacterId>) {
+        let mut aware = self.aware.borrow_mut();
+        match aware.binary_search_by(|(id, _)| id.cmp(&npc)) {
+            Ok(at) => aware[at].1.clone_from(now),
+            Err(at) => aware.insert(at, (npc, now.clone())),
+        }
+    }
+
+    /// Calls `see` with what the NPC `npc` has noticed, as the engine last
+    /// told, if it has told.
+    pub(crate) fn aware_of<T>(
+        &self,
+        npc: CharacterId,
+        see: impl FnOnce(&lore_npc::Awareness<CharacterId>) -> T,
+    ) -> Option<T> {
+        let aware = self.aware.borrow();
+        let at = aware.binary_search_by(|(id, _)| id.cmp(&npc)).ok()?;
+        Some(see(&aware[at].1))
+    }
+
+    /// Calls `see` with every NPC and what it has noticed, in the order of
+    /// their ids.
+    pub(crate) fn each_aware(
+        &self,
+        mut see: impl FnMut(CharacterId, &lore_npc::Awareness<CharacterId>),
+    ) {
+        for (npc, aware) in self.aware.borrow().iter() {
+            see(*npc, aware);
+        }
+    }
+
+    /// Puts into `into` what scripts asked of what NPCs noticed since this
+    /// was last called, in the order asked.
+    pub(crate) fn take_aware_asks(&self, into: &mut Vec<AwareAsk>) {
+        into.clear();
+        into.append(&mut self.aware_asks.borrow_mut());
     }
 
     /// Notes that the NPC `npc` sees nobody.
@@ -1100,6 +1194,14 @@ pub(crate) fn get(lua: &Lua, id: CharacterId, field: &str) -> mlua::Result<Value
         "sightAngle" => Value::Number(f64::from(senses.sight_angle)),
         "hearing" => Value::Number(f64::from(senses.hearing)),
         "nightSight" => Value::Number(f64::from(senses.night_sight)),
+        "alertness" => Value::Number(f64::from(senses.alertness)),
+        "awareness" => {
+            let alive = (shared.characters.health(id)).is_some_and(|(now, _)| now > 0.0);
+            let level = (shared.npcs.aware_of(id, lore_npc::Awareness::level))
+                .filter(|_| alive)
+                .unwrap_or_default();
+            Value::String(lua.create_string(level.word())?)
+        }
         _ => Value::Nil,
     })
 }
@@ -1187,9 +1289,17 @@ pub(crate) fn set(lua: &Lua, id: CharacterId, field: &str, value: &Value) -> mlu
                 ),
             ));
         }
-        "sightDistance" | "sightAngle" | "hearing" | "nightSight" => {
+        "sightDistance" | "sightAngle" | "hearing" | "nightSight" | "alertness" => {
             let value = sense_value(lua, field, value)?;
             version.change(id, &name, |said| set_sense(&mut said.senses, field, value));
+        }
+        "awareness" => {
+            return Err(fail(
+                lua,
+                "An NPC's `awareness` is what it has noticed, which its senses fill: it cannot be \
+                 set. To raise the alarm write guard:alert(game.player), and to settle it \
+                 guard:calm()",
+            ));
         }
         _ => {}
     }
@@ -1865,6 +1975,12 @@ fn sense_value(lua: &Lua, field: &str, value: &Value) -> mlua::Result<f32> {
             "guard.hearing = 0",
             (0.0, BEST_HEARING),
         ),
+        "alertness" => (
+            "how quickly the NPC notices someone: 1 as a person does, 0.5 a sleepy guard, 2 a \
+             watchful one, 0 never, up to 10",
+            "guard.alertness = 0.5",
+            (0.0, MOST_ALERT),
+        ),
         _ => (
             "how well the NPC sees in the dark, from 0 (as a person does) to 1 (as well as \
              by day)",
@@ -1888,6 +2004,7 @@ fn set_sense(senses: &mut NpcSenses, field: &str, value: f32) {
         "sightDistance" => senses.sight_distance = value,
         "sightAngle" => senses.sight_angle = value,
         "hearing" => senses.hearing = value,
+        "alertness" => senses.alertness = value,
         _ => senses.night_sight = value,
     }
 }
@@ -1980,4 +2097,164 @@ pub(crate) fn in_sight(lua: &Lua, id: CharacterId) -> mlua::Result<Table> {
         }
     }
     Ok(list)
+}
+
+/// Who `who` is for `method`, which takes a character: an error that says
+/// what to write when it is anything else.
+fn character_for(lua: &Lua, method: &str, who: &Value, example: &str) -> mlua::Result<CharacterId> {
+    crate::character_api::id_of_value(lua, who).ok_or_else(|| {
+        fail(
+            lua,
+            format!(
+                "{method} needs a character (game.player or an NPC), but it was given {}. Write \
+                 it like this: {example}",
+                describe(who)
+            ),
+        )
+    })
+}
+
+/// What the NPC `id` has noticed of `who`, if alive: its level and gauge.
+fn noticed(shared: &Shared, id: CharacterId, who: CharacterId) -> (lore_npc::Aware, f32) {
+    let alive = (shared.characters.health(id)).is_some_and(|(now, _)| now > 0.0);
+    (shared
+        .npcs
+        .aware_of(id, |aware| (aware.level_of(who), aware.gauge_of(who))))
+    .filter(|_| alive)
+    .unwrap_or_default()
+}
+
+/// `npc:awarenessOf(who)`: "unaware", "curious", "searching" or "alarmed".
+pub(crate) fn awareness_of(lua: &Lua, id: CharacterId, who: &Value) -> mlua::Result<String> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "awarenessOf")?;
+    let who = character_for(
+        lua,
+        "awarenessOf",
+        who,
+        "if guard:awarenessOf(game.player) == \"alarmed\" then print(\"Halt!\") end",
+    )?;
+    Ok(noticed(&shared, id, who).0.word().to_owned())
+}
+
+/// `npc:noticeOf(who)`: how much the NPC has noticed `who`, from 0 to 1.
+pub(crate) fn notice_of(lua: &Lua, id: CharacterId, who: &Value) -> mlua::Result<f64> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "noticeOf")?;
+    let who = character_for(
+        lua,
+        "noticeOf",
+        who,
+        "meter.value = guard:noticeOf(game.player)",
+    )?;
+    Ok(f64::from(noticed(&shared, id, who).1))
+}
+
+/// `npc:onAwareness(function(who, now, before, place) ... end)`.
+pub(crate) fn on_awareness(lua: &Lua, id: CharacterId, handler: Value) -> mlua::Result<()> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "onAwareness")?;
+    let Value::Function(handler) = handler else {
+        return Err(fail(
+            lua,
+            format!(
+                "onAwareness needs the function to call when what the NPC has noticed changes, \
+                 but it was given {}. Write it like this: guard:onAwareness(function(who, now, \
+                 before, place) if now == \"alarmed\" then print(\"Halt!\") end end)",
+                describe(&handler)
+            ),
+        ));
+    };
+    shared.handlers.borrow_mut().npc_aware.push((id, handler));
+    Ok(())
+}
+
+/// `npc:alert(who)` or `npc:alert(place)`: the NPC is alarmed about them,
+/// or about the place, from the next tick.
+pub(crate) fn alert(lua: &Lua, id: CharacterId, about: &Value) -> mlua::Result<()> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "alert")?;
+    crate::time_api::rules_only(lua, &shared, "npc:alert")?;
+    let ask = if let Value::Vector(at) = about {
+        let at = [at.x(), at.y(), at.z()];
+        if !at
+            .iter()
+            .all(|n| n.is_finite() && n.abs() <= FURTHEST_PLACE)
+        {
+            return Err(fail(
+                lua,
+                "alert was given a place too far from the middle of the world. Give it a place \
+                 in the level: guard:alert(game.thing(\"Bell\").position)",
+            ));
+        }
+        AwareAsk::Alert {
+            npc: id,
+            about: None,
+            at,
+        }
+    } else {
+        let who = crate::character_api::id_of_value(lua, about).ok_or_else(|| {
+            fail(
+                lua,
+                format!(
+                    "alert needs who the NPC is alarmed about (game.player or an NPC), or a \
+                     place, but it was given {}. Write it like this: guard:alert(game.player), \
+                     or guard:alert(game.thing(\"Bell\").position)",
+                    describe(about)
+                ),
+            )
+        })?;
+        AwareAsk::Alert {
+            npc: id,
+            about: Some(who),
+            at: shared.characters.position(who).unwrap_or_default(),
+        }
+    };
+    shared.npcs.aware_asks.borrow_mut().push(ask);
+    Ok(())
+}
+
+/// `npc:calm()` or `npc:calm(who)`: the NPC settles at once, about
+/// everyone and everything or about `who`.
+pub(crate) fn calm(lua: &Lua, id: CharacterId, about: &Value) -> mlua::Result<()> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "calm")?;
+    crate::time_api::rules_only(lua, &shared, "npc:calm")?;
+    let about = match about {
+        Value::Nil => None,
+        given => Some(character_for(
+            lua,
+            "calm",
+            given,
+            "guard:calm(), or guard:calm(game.player)",
+        )?),
+    };
+    shared
+        .npcs
+        .aware_asks
+        .borrow_mut()
+        .push(AwareAsk::Calm { npc: id, about });
+    Ok(())
+}
+
+/// `game.showNoticeMarks(shown)`.
+pub(crate) fn show_marks(lua: &Lua, shared: &Rc<Shared>, shown: &Value) -> mlua::Result<()> {
+    let Value::Boolean(shown) = shown else {
+        return Err(fail(
+            lua,
+            format!(
+                "game.showNoticeMarks takes true or false: whether the engine draws a mark that \
+                 fills over each NPC noticing the player. It was given {}. Write it like this: \
+                 game.showNoticeMarks(true)",
+                describe(shown)
+            ),
+        ));
+    };
+    shared.npc_version.marks.set(*shown);
+    Ok(())
+}
+
+/// Whether the engine draws its marks over the NPCs noticing the player.
+pub(crate) fn shows_marks(shared: &Shared) -> bool {
+    shared.npc_version.marks.get()
 }

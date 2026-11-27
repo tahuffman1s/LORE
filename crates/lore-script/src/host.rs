@@ -2256,6 +2256,119 @@ impl ScriptHost {
         self.npcs.blind(npc);
     }
 
+    /// Notes what the NPC `npc` has noticed now, for the script to read
+    /// (`npc:awarenessOf`, `npc.awareness`, `npc:noticeOf`) and the marks
+    /// over it to show. Call once a tick for each NPC, after it is stepped.
+    pub fn set_npc_awareness(&self, npc: CharacterId, aware: &lore_npc::Awareness<CharacterId>) {
+        self.npcs.set_aware(npc, aware);
+    }
+
+    /// Calls `see` with every NPC and what it has noticed, as last told by
+    /// [`set_npc_awareness`](Self::set_npc_awareness), in the order of
+    /// their ids.
+    pub fn each_npc_awareness(
+        &self,
+        see: impl FnMut(CharacterId, &lore_npc::Awareness<CharacterId>),
+    ) {
+        self.npcs.each_aware(see);
+    }
+
+    /// Puts into `into` (emptied first) what scripts asked of what NPCs
+    /// noticed (`npc:alert`, `npc:calm`) since this was last called, in the
+    /// order they asked.
+    pub fn take_awareness_asks(&mut self, into: &mut Vec<crate::AwareAsk>) {
+        self.npcs.take_aware_asks(into);
+    }
+
+    /// Whether the script asked the engine to draw its marks over the NPCs
+    /// noticing the player (`game.showNoticeMarks(true)`).
+    #[must_use]
+    pub fn shows_notice_marks(&self) -> bool {
+        (self.running.as_ref()).is_some_and(|version| crate::npc_api::shows_marks(&version.shared))
+    }
+
+    /// Tells the script what the NPC `npc` has noticed changed: its
+    /// `onAwareness` functions are called with who it is about (nil for a
+    /// place), the level now and before, and the place they were last
+    /// sensed.
+    pub fn npc_awareness_changed(
+        &mut self,
+        npc: CharacterId,
+        change: &lore_npc::Change<CharacterId>,
+    ) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        if !crate::npc_api::has_sense_handler(&shared, npc, |h| &h.npc_aware)
+            || !self.characters.has(npc)
+        {
+            return;
+        }
+        let who = match change.about {
+            Some(who) if self.characters.has(who) => {
+                match shared.handles.character(&version.vm, who) {
+                    Ok(handle) => mlua::Value::UserData(handle),
+                    Err(_) => return,
+                }
+            }
+            // One who has left the world since is told as nobody.
+            _ => mlua::Value::Nil,
+        };
+        let [x, y, z] = change.at;
+        let args = (
+            who,
+            change.now.word(),
+            change.before.word(),
+            mlua::Vector::new(x, y, z),
+        );
+        self.call_npc_handlers(&shared, npc, |h| &h.npc_aware, args);
+    }
+
+    /// Tells each NPC with an `onAwareness` function that it grew curious
+    /// about the player, searched, was alarmed, and calmed down a step at a
+    /// time, and then that it heard a shot at a place, searched and calmed
+    /// again, though nothing happened: for `lore check`, so what each does is run. Says how many
+    /// NPCs that was.
+    pub fn pretend_awareness(&mut self) -> usize {
+        use lore_npc::Aware::{Alarmed, Curious, Searching, Unaware};
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let shared = Rc::clone(&version.shared);
+        let listening: Vec<CharacterId> = (shared.npcs.all().into_iter())
+            .filter(|&npc| crate::npc_api::has_sense_handler(&shared, npc, |h| &h.npc_aware))
+            .collect();
+        let at = self
+            .characters
+            .position(CharacterId::PLAYER)
+            .unwrap_or_default();
+        for &npc in &listening {
+            // What really happens: rising a step at a time as the player
+            // is seen, falling a step at a time once they are gone; then a
+            // shot nobody saw fired, searched for and given up.
+            let player = Some(CharacterId::PLAYER);
+            for (about, now, before) in [
+                (player, Curious, Unaware),
+                (player, Searching, Curious),
+                (player, Alarmed, Searching),
+                (player, Searching, Alarmed),
+                (player, Curious, Searching),
+                (player, Unaware, Curious),
+                (None, Searching, Unaware),
+                (None, Curious, Searching),
+                (None, Unaware, Curious),
+            ] {
+                let change = lore_npc::Change {
+                    about,
+                    at,
+                    now,
+                    before,
+                };
+                self.npc_awareness_changed(npc, &change);
+            }
+        }
+        listening.len()
+    }
+
     /// Calls the functions `pick` gives for the NPC `npc` with the
     /// character `who`, and `at` after it when there is one.
     fn tell_npc(
@@ -2576,6 +2689,13 @@ impl ScriptHost {
     /// Call it before [`draw`](Self::draw).
     pub fn set_view(&self, view: crate::ViewTold) {
         self.tools.set_view(view);
+    }
+
+    /// Where the picture being drawn is seen from, as last said by
+    /// [`set_view`](Self::set_view).
+    #[must_use]
+    pub fn view(&self) -> Option<crate::ViewTold> {
+        self.tools.view()
     }
 
     /// How the player walks, sprints, crouches, swims, jumps and falls, as

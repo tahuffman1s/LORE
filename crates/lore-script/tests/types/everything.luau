@@ -735,6 +735,20 @@ if false then
     local seen: { Character } = watcher:inSight()
     for _, who: Character in seen do print(who.name) end
     game.audio.playAt("landing", watcher.position, { npcsHear = false })
+    local sleepy: Npc = game.npc { name = "Sleepy", at = "Gate", alertness = 0.5 }
+    sleepy.alertness = 2
+    local level: NpcAwareness = sleepy.awareness
+    local of: NpcAwareness = sleepy:awarenessOf(game.player)
+    local much: number = sleepy:noticeOf(game.player)
+    print(level, of, much, sleepy.alertness)
+    sleepy:onAwareness(function(who: Character?, now: NpcAwareness, before: NpcAwareness, place: vector)
+        if who == game.player and now == "alarmed" and before ~= "alarmed" then print(place.x) end
+    end)
+    sleepy:alert(game.player)
+    sleepy:alert(vector.create(1, 0, 2))
+    sleepy:calm(game.player)
+    sleepy:calm()
+    game.showNoticeMarks(true)
 end
 if false then
     game.sides {

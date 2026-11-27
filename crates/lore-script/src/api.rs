@@ -62,6 +62,7 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "npc",
     "npcs",
     "showUsePrompt",
+    "showNoticeMarks",
     "sides",
     "side",
     "onFeelingChange",
@@ -153,6 +154,8 @@ pub(crate) struct Handlers {
     pub npc_saw: Vec<(CharacterId, Function)>,
     pub npc_lost: Vec<(CharacterId, Function)>,
     pub npc_heard: Vec<(CharacterId, Function)>,
+    /// `npc:onAwareness`, each with the NPC it is for.
+    pub npc_aware: Vec<(CharacterId, Function)>,
     /// `thing:onEnter` and `thing:onLeave`, likewise.
     pub entered: Vec<(Rc<str>, Function)>,
     pub left: Vec<(Rc<str>, Function)>,
@@ -547,6 +550,13 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         "showUsePrompt",
         lua.create_function(move |lua, shown: Value| {
             crate::thing_api::use_prompt(lua, &state, &shown)
+        })?,
+    )?;
+    let state = Rc::clone(shared);
+    game.set(
+        "showNoticeMarks",
+        lua.create_function(move |lua, shown: Value| {
+            crate::npc_api::show_marks(lua, &state, &shown)
         })?,
     )?;
 
