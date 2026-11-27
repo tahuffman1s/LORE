@@ -922,10 +922,11 @@ declare extern type Npc extends Character with
     --- place, 1.5 for someone); `facing` turns it on arriving (degrees left,
     --- as the map writes them; at a marker of type "place" it faces the way
     --- the marker does). A new `goTo` or `follow` takes the place of the
-    --- last; the same `goTo` again (every tick, say) changes nothing, and
-    --- one to a place it just could not reach stops at once for two
-    --- seconds and is not told twice. An NPC that is down (health 0) must
-    --- be stood up (`setHealth`) before it walks. `onArrive` hears it get there, `onCannotReach` why it cannot,
+    --- last. Sending the same `goTo` again (every tick, say) changes
+    --- nothing; sent again to a place it just could not reach, it stops at
+    --- once and `onCannotReach` is not called a second time. On an NPC
+    --- that is down (health 0) `goTo` and `follow` are an error: give it
+    --- health first (`setHealth`). `onArrive` hears it get there, `onCannotReach` why it cannot,
     --- both in the game's tick. A walk under way goes on when the script is
     --- saved and loads again.
     --- Example: guard:goTo("Gate")
@@ -949,14 +950,15 @@ declare extern type Npc extends Character with
     function stop(self): ()
 
     --- Calls `handler` each time the NPC gets where `goTo` sent it, with
-    --- the NPC and what `goTo` was given (never nil: if that is gone, where
-    --- the NPC stands). `lore check` calls it once.
+    --- the NPC and what `goTo` was given; if that is gone, where the NPC
+    --- stands, so `where` is never nil. `lore check` calls it once.
     --- Example: guard:onArrive(function(guard, where) print(guard.name .. " is at " .. tostring(where)) end)
     function onArrive(self, handler: (npc: Npc, where: string | vector | Thing | Character) -> ()): ()
 
     --- Calls `handler` when the NPC cannot get where it is walking, with a
-    --- sentence that says who, where to and why: a door is locked or the
-    --- script kept it shut after it was opened, nothing
+    --- sentence that says who, where to and why: a door is locked, or the
+    --- script shut it again after it was opened (let it open, or lock it
+    --- with usable = false), nothing
     --- joins the two places, the place is off the ground, or something it
     --- cannot get round was in the way for a while (it tries again twice
     --- first). How far short it got is said too. A walk to a place ends

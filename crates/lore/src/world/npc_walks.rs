@@ -668,7 +668,7 @@ fn the_player_cannot_push_a_walker_off_a_ledge_or_into_a_wall() {
         // The player leans on each from the inland or open side.
         let a = feet_of(&world, "A");
         let b = feet_of(&world, "B");
-        world.player.player.position = if world.tick % 2 == 0 {
+        world.player.player.position = if world.tick.is_multiple_of(2) {
             [a[0] - 0.4, 0.0, a[2]]
         } else {
             [b[0], 0.0, b[2] + 0.4]

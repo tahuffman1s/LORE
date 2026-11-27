@@ -1117,9 +1117,10 @@ impl Trouble {
                     |name| format!("the door \"{name}\""),
                 );
                 format!(
-                    "{named} stayed shut after it opened it, and there is no other way: the \
-                     game's script keeps it shut (an onUse that shuts it again, or a close \
-                     every tick){}. Let the door open, or send it another way",
+                    "{named} stayed shut after it opened it, and there is no other way \
+                     round{}. Something in the script shuts it again (an onUse that closes it, \
+                     or a close called every tick). Stop that, or lock it on purpose with \
+                     usable = false",
                     short(*nearest)
                 )
             }

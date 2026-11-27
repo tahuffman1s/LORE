@@ -1458,12 +1458,13 @@ fn standing_or_error(
         .health(id)
         .is_some_and(|(now, _)| now <= 0.0)
     {
-        let name = (shared.characters.name_and_place(id)).map_or_else(String::new, |(n, _)| n);
+        let name = (shared.characters.name_and_place(id))
+            .map_or_else(|| "This NPC".to_owned(), |(n, _)| n);
         return Err(fail(
             lua,
             format!(
-                "{name} is down (health 0), so it cannot {function}. Stand it up first: \
-                 guard:setHealth(100), then guard:{function}(...)"
+                "{name} is down (health 0), so it cannot {function} until it stands. Give it \
+                 health first, for example npc:setHealth(100), then call npc:{function} again"
             ),
         ));
     }
