@@ -1086,14 +1086,19 @@ declare extern type Npc extends Character with
     --- "unaware", "curious" (something is there: it turns to look),
     --- "searching" (someone was there: it knows where they were last seen
     --- or heard) or "alarmed" (it sees them). Its senses fill it bit by
-    --- bit: someone in plain view close by alarms it at once, a glimpse at
-    --- the edge of sight in the dark only slowly, a noise makes it curious
-    --- or searching but never alarmed. It falls slowly once nothing new is
-    --- sensed: alarmed about 5 seconds after it last saw them, searching
-    --- till 16 seconds, curious till 24 seconds, then unaware. A friend, or another NPC on
-    --- no side against it, is never more than noticed; the player is,
-    --- unless a friend (`game.sides`). How fast the player is noticed
-    --- follows `game.difficulty`.
+    --- bit: an enemy standing in plain view 5 metres away alarms it in about
+    --- a second, one sprinting across its view 20 metres off only sets it
+    --- searching, a glimpse in the dark is slow. A noise makes it curious
+    --- or searching but never alarmed; a shot heard at all makes it curious
+    --- at once, and searching if it was in the open or near. It falls slowly
+    --- once nothing new is sensed: alarmed about 5 seconds after it last
+    --- saw them, searching till 16 seconds, curious till 24 seconds, then
+    --- unaware. Only an enemy (`game.sides`, or someone it holds a grudge
+    --- against) is searched for or alarms it. Someone it is neutral about
+    --- (anyone, in a game with no `game.sides`) is at most "curious": it
+    --- looks at them with its head and chest, not its feet, and is unaware
+    --- again about 3 seconds after they go. A friend is never more than
+    --- noticed. How fast the player is noticed follows `game.difficulty`.
     --- Example: if guard.awareness == "alarmed" then print("The guard is on to someone") end
     awareness: NpcAwareness
 
@@ -1126,21 +1131,26 @@ declare extern type Npc extends Character with
     --- go and look; it is never nil. Several steps at once are told as one change: someone
     --- close by goes from "unaware" to "alarmed". Falling, it goes one step
     --- at a time. Called in the game's tick, NPCs in the order they were
-    --- made. `lore check` tells it of pretend changes.
+    --- made. `lore check` tells it of pretend changes: curious, searching,
+    --- alarmed about the player and back down a step at a time, then a
+    --- shot heard at a place, searched for, and given up. When the script is saved it runs
+    --- again, and this function replaces the old one; the NPC is kept.
     --- Example: guard:onAwareness(function(who, now, before, place) if now == "alarmed" and who == game.player then print("Halt!") end end)
     function onAwareness(self, handler: (who: Character?, now: NpcAwareness, before: NpcAwareness, place: vector) -> ()): ()
 
     --- Alarms the NPC about `who`, wherever they are, or about a place: a
     --- bell rung, a cutscene. From the next tick it is "alarmed", and falls
-    --- from there as if it had just seen them. It always needs someone or
-    --- a place; `calm()` with nothing settles it about everyone.
+    --- from there as if it had just seen them. `who` need not be an enemy:
+    --- until it is calm again, it treats them as one. It always needs
+    --- someone or a place; `calm()` with nothing settles it about everyone.
     --- Example: guard:alert(game.player)
     --- Example: guard:alert(game.thing("Bell").position)
     function alert(self, about: Character | vector): ()
 
     --- Settles the NPC at once, about everyone and everything, or only
     --- about `who`: it is "unaware" from the next tick, and `onAwareness`
-    --- is told.
+    --- is told. It still has its senses: an enemy it still sees alarms it
+    --- again in about a second, so calm it once the enemy is out of sight.
     --- Example: guard:calm()
     function calm(self, who: Character?): ()
 end
@@ -3197,8 +3207,10 @@ declare game: {
     --- Example: game.showUsePrompt(false)
     showUsePrompt: (shown: boolean) -> (),
 
-    --- Draws a mark over each NPC noticing the player (four at most, the
-    --- most aware first): a pill that fills as the NPC notices them more,
+    --- Draws a mark over each NPC noticing the player that counts them an
+    --- enemy (four at most, the most aware first; none over a friend, nor
+    --- over one only curious about a stranger): a pill that fills as the
+    --- NPC notices them more,
     --- with "?" over it once the NPC is searching and "!" once it is
     --- alarmed; for an NPC off the screen, at the edge in its direction.
     --- Off until a script switches it on. A game drawing its own reads

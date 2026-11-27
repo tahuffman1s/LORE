@@ -2324,9 +2324,9 @@ impl ScriptHost {
     }
 
     /// Tells each NPC with an `onAwareness` function that it grew curious
-    /// about the player, alarmed, searched and calmed down, and then that
-    /// it heard something at a place and calmed again, though nothing
-    /// happened: for `lore check`, so what each does is run. Says how many
+    /// about the player, searched, was alarmed, and calmed down a step at a
+    /// time, and then that it heard a shot at a place, searched and calmed
+    /// again, though nothing happened: for `lore check`, so what each does is run. Says how many
     /// NPCs that was.
     pub fn pretend_awareness(&mut self) -> usize {
         use lore_npc::Aware::{Alarmed, Curious, Searching, Unaware};
@@ -2342,13 +2342,20 @@ impl ScriptHost {
             .position(CharacterId::PLAYER)
             .unwrap_or_default();
         for &npc in &listening {
+            // What really happens: rising a step at a time as the player
+            // is seen, falling a step at a time once they are gone; then a
+            // shot nobody saw fired, searched for and given up.
+            let player = Some(CharacterId::PLAYER);
             for (about, now, before) in [
-                (Some(CharacterId::PLAYER), Curious, Unaware),
-                (Some(CharacterId::PLAYER), Alarmed, Curious),
-                (Some(CharacterId::PLAYER), Searching, Alarmed),
-                (Some(CharacterId::PLAYER), Unaware, Searching),
+                (player, Curious, Unaware),
+                (player, Searching, Curious),
+                (player, Alarmed, Searching),
+                (player, Searching, Alarmed),
+                (player, Curious, Searching),
+                (player, Unaware, Curious),
                 (None, Searching, Unaware),
-                (None, Unaware, Searching),
+                (None, Curious, Searching),
+                (None, Unaware, Curious),
             ] {
                 let change = lore_npc::Change {
                     about,

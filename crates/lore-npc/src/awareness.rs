@@ -31,7 +31,7 @@
 //! The numbers, at the middle of the difficulty dial and an alertness of 1:
 //! someone seen at a strength of 1 alarms in 0.7 seconds, of 0.75 (standing
 //! still, close, in plain light) in 1.15, of 0.6 (moving, 20 metres off) in
-//! 1.75, of 0.3 in 6.6; the first look at someone counts half
+//! 1.7, of 0.3 in 6.6; the first look at someone counts half
 //! ([`FIRST_LOOK`]). After the last sight of an enemy it is alarmed 4.75
 //! seconds more, searching till 16, curious till 23.5, and then calm.
 //!
