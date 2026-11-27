@@ -1,0 +1,30 @@
+<!-- The keyboard a gamepad types into a menu's text box with. The menu kit
+     reads the keys from this page: every .key in each .keyrow, in order.
+     A key types its own text, unless data-key says it is "shift", "space",
+     "back" (takes a letter off) or "done". The kit puts .chosen on the key
+     the player is on and .on on Shift while capitals are on, the text so far
+     in #typed (with .caret after it) and the buttons in #hints.
+
+     A game's ui/menu-keyboard.html takes this page's place: it may move,
+     add or take away keys. Style it in ui/menus.css. -->
+<body>
+  <div id="board">
+    <div id="typed-row"><span id="typed"></span><span class="caret"></span></div>
+    <div class="keyrow">
+      <div class="key">1</div><div class="key">2</div><div class="key">3</div><div class="key">4</div><div class="key">5</div><div class="key">6</div><div class="key">7</div><div class="key">8</div><div class="key">9</div><div class="key">0</div>
+    </div>
+    <div class="keyrow">
+      <div class="key">q</div><div class="key">w</div><div class="key">e</div><div class="key">r</div><div class="key">t</div><div class="key">y</div><div class="key">u</div><div class="key">i</div><div class="key">o</div><div class="key">p</div>
+    </div>
+    <div class="keyrow home">
+      <div class="key">a</div><div class="key">s</div><div class="key">d</div><div class="key">f</div><div class="key">g</div><div class="key">h</div><div class="key">j</div><div class="key">k</div><div class="key">l</div>
+    </div>
+    <div class="keyrow">
+      <div class="key">z</div><div class="key">x</div><div class="key">c</div><div class="key">v</div><div class="key">b</div><div class="key">n</div><div class="key">m</div><div class="key">-</div><div class="key">'</div><div class="key">.</div>
+    </div>
+    <div class="keyrow">
+      <div class="key wide" data-key="shift">Shift</div><div class="key space" data-key="space">Space</div><div class="key wide" data-key="back">Back</div><div class="key wide done" data-key="done">Done</div>
+    </div>
+    <div id="hints"></div>
+  </div>
+</body>

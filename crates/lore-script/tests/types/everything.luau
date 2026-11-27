@@ -1030,6 +1030,8 @@ screen.visible = true
 screen.pauses = false
 print(screen.file, screen.visible, screen.pauses, game.ui.anyOpen())
 game.ui.reduceMotion = true
+game.ui.theme("parchment")
+game.ui.theme(nil)
 local reduced: boolean = game.ui.reduceMotion
 pausing:remove()
 print(reduced)

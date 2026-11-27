@@ -43,6 +43,7 @@ pub(crate) mod draw;
 pub(crate) mod element;
 mod input;
 mod keyboard;
+pub(crate) mod menus;
 
 pub(crate) use input::{Controls, Fired, FiredKind};
 
@@ -53,6 +54,7 @@ pub(crate) const UI_FUNCTIONS: &[&str] = &[
     "reduceMotion",
     "escape",
     "onScreenKeyboard",
+    "theme",
 ];
 /// What `game.ui.sounds` holds.
 pub(crate) const UI_SOUNDS: &[&str] = &["move", "press", "volume"];
@@ -221,6 +223,12 @@ struct Entry {
     focus_asked: Option<ElementId>,
     /// The text box that has focus, and what it held when it got it.
     text_focus: Option<(ElementId, String)>,
+    /// A screen of the engine's menus (`game.menu`), by the name of its
+    /// file, such as `pause-menu.html`. The menu kit drives it: it takes no
+    /// input of its own and does not count as a screen that is open.
+    menu: Option<String>,
+    /// Read again from its files since the menu kit last asked.
+    reloaded: bool,
 }
 
 struct Inner {
@@ -228,7 +236,11 @@ struct Inner {
     next_id: ScreenId,
     /// The showing screens, bottom to top.
     stack: Vec<ScreenId>,
+    /// Whether things on the screens go straight to where they end: the
+    /// script asked (`script_reduce`) or the player did (`player_reduce`).
     reduce_motion: bool,
+    script_reduce: bool,
+    player_reduce: bool,
     /// Gradient colours while one frame is drawn, kept to not ask for memory
     /// every frame.
     stops: Vec<lore_ui::Stop>,
@@ -242,6 +254,13 @@ struct Inner {
     paused_by_ui: bool,
     /// Events taken from a page, kept to not set memory aside every tick.
     events: Vec<lore_markup::Event>,
+    /// Where the free pointer was at the last tick, in units of the page.
+    pointer: Option<[f32; 2]>,
+    /// The ready-made look of the engine's menus a game picked, if any.
+    theme: Option<String>,
+    /// A menu page was made or read again outside a reload of the files,
+    /// so the host must look at the screens' mistakes again.
+    error_news: bool,
 }
 
 impl Entry {
@@ -266,7 +285,15 @@ impl Entry {
             binds: Vec::new(),
             focus_asked: None,
             text_focus: None,
+            menu: None,
+            reloaded: false,
         }
+    }
+
+    /// Whether the page is one the player works directly: it has a control
+    /// and is not one of the engine's menus, which the menu kit drives.
+    fn takes_input(&self) -> bool {
+        self.menu.is_none() && self.page.as_ref().is_some_and(has_control)
     }
 }
 
@@ -277,6 +304,8 @@ impl Default for Inner {
             next_id: 0,
             stack: Vec::new(),
             reduce_motion: false,
+            script_reduce: false,
+            player_reduce: false,
             stops: Vec::new(),
             unknown_pictures: HashSet::new(),
             sounds: Sounds::default(),
@@ -284,6 +313,9 @@ impl Default for Inner {
             keyboard: None,
             paused_by_ui: false,
             events: Vec::new(),
+            pointer: None,
+            theme: None,
+            error_news: false,
         }
     }
 }
@@ -387,9 +419,14 @@ impl UiState {
         env: &DrawEnv<'_>,
         answered: &dyn Fn(ScreenId, &str, HandlerSite) -> bool,
     ) -> ScreensChecked {
-        let mut found = ScreensChecked::default();
+        let mut found = ScreensChecked {
+            mistakes: self.check_menus(),
+            ..ScreensChecked::default()
+        };
         let mut inner = self.inner.borrow_mut();
-        for entry in inner.entries.iter_mut().filter(|entry| !entry.engine) {
+        for entry in
+            (inner.entries.iter_mut()).filter(|entry| !entry.engine && entry.menu.is_none())
+        {
             found.screens += 1;
             if let Some(error) = &entry.error {
                 found.mistakes.push(format_mistake(error));
@@ -563,6 +600,28 @@ fn build(files: &Files, path: &str, note: &str) -> Built {
             };
         }
     };
+    match add_links(files, &mut page, path, &mut sources, &mut watches, note) {
+        Ok(()) => Built {
+            page: Ok(page),
+            watches,
+        },
+        Err(error) => Built {
+            page: Err(*error),
+            watches,
+        },
+    }
+}
+
+/// Reads the stylesheets the page of `path` links, from beside it, and adds
+/// them in the order they are written.
+fn add_links(
+    files: &Files,
+    page: &mut Page,
+    path: &str,
+    sources: &mut HashMap<String, String>,
+    watches: &mut Vec<FileWatch>,
+    note: &str,
+) -> Result<(), Box<ScriptError>> {
     let links: Vec<(String, u32)> = page
         .stylesheet_links()
         .iter()
@@ -572,31 +631,18 @@ fn build(files: &Files, path: &str, note: &str) -> Built {
     for (href, line) in links {
         let name = format!("{dir}{href}");
         watches.push(watch_of(files, &name));
-        let css = match files.read(&name) {
-            Ok(text) => text,
-            Err(problem) => {
-                let error = read_error(files, &name, &problem, Some((path, line)), note);
-                return Built {
-                    page: Err(error),
-                    watches,
-                };
-            }
-        };
+        let css = files.read(&name).map_err(|problem| {
+            Box::new(read_error(files, &name, &problem, Some((path, line)), note))
+        })?;
         sources.insert(name.clone(), css.clone());
         if let Err(mut error) = page.add_stylesheet(&href, &css) {
             if error.file == href {
                 error.file.clone_from(&name);
             }
-            return Built {
-                page: Err(markup_error(&error, &sources, note)),
-                watches,
-            };
+            return Err(Box::new(markup_error(&error, sources, note)));
         }
     }
-    Built {
-        page: Ok(page),
-        watches,
-    }
+    Ok(())
 }
 
 /// The `<kbd>` elements of a page.
@@ -747,9 +793,11 @@ impl UiState {
     /// dropped; if it did not, the ones it made are.
     pub(crate) fn finish_run(&self, loaded: bool) {
         let mut inner = self.inner.borrow_mut();
-        inner
-            .entries
-            .retain(|entry| entry.engine || if loaded { entry.claimed } else { !entry.fresh });
+        inner.entries.retain(|entry| {
+            // The menu kit's screens belong to the run that made them: a
+            // run that fails to load leaves the old run, and its menus, on.
+            entry.engine || if loaded { entry.claimed } else { !entry.fresh }
+        });
         let Inner { entries, stack, .. } = &mut *inner;
         stack.retain(|id| entries.iter().any(|entry| entry.id == *id));
         for entry in entries.iter_mut() {
@@ -763,7 +811,11 @@ impl UiState {
     pub(crate) fn load(&self, path: &str, pauses: bool) -> ScreenId {
         let mut inner = self.inner.borrow_mut();
         let reduce = inner.reduce_motion;
-        if let Some(entry) = inner.entries.iter_mut().find(|entry| entry.path == path) {
+        if let Some(entry) = inner
+            .entries
+            .iter_mut()
+            .find(|entry| entry.path == path && entry.menu.is_none())
+        {
             entry.claimed = true;
             entry.pauses = pauses;
             return entry.id;
@@ -889,15 +941,32 @@ impl UiState {
         inner
             .entries
             .iter()
-            .any(|entry| entry.visible && entry.page.as_ref().is_some_and(has_control))
+            .any(|entry| entry.visible && entry.takes_input())
     }
 
-    pub(crate) fn reduce_motion(&self) -> bool {
-        self.inner.borrow().reduce_motion
+    /// What the script said with `game.ui.reduceMotion`.
+    pub(crate) fn script_reduce_motion(&self) -> bool {
+        self.inner.borrow().script_reduce
     }
 
+    /// `game.ui.reduceMotion`: the script's say on whether things move.
     pub(crate) fn set_reduce_motion(&self, on: bool) {
+        self.inner.borrow_mut().script_reduce = on;
+        self.apply_reduce();
+    }
+
+    /// The player's own setting, `reduce_motion`: with the script's, either
+    /// one stops what moves.
+    pub(crate) fn set_player_reduce_motion(&self, on: bool) {
+        if self.inner.borrow().player_reduce != on {
+            self.inner.borrow_mut().player_reduce = on;
+            self.apply_reduce();
+        }
+    }
+
+    fn apply_reduce(&self) {
         let mut inner = self.inner.borrow_mut();
+        let on = inner.script_reduce || inner.player_reduce;
         inner.reduce_motion = on;
         for entry in &mut inner.entries {
             if let Some(page) = &mut entry.page {
@@ -981,11 +1050,7 @@ impl UiState {
         let takes: Vec<ScreenId> = stack
             .iter()
             .copied()
-            .filter(|on| {
-                entries
-                    .iter()
-                    .any(|e| e.id == *on && e.page.as_ref().is_some_and(has_control))
-            })
+            .filter(|on| entries.iter().any(|e| e.id == *on && e.takes_input()))
             .collect();
         if takes.len() > 1 && takes.last() == Some(&id) {
             inner.set_visible(id, false);
@@ -1012,6 +1077,7 @@ impl UiState {
         let mut changed = false;
         let mut inner = self.inner.borrow_mut();
         let reduce = inner.reduce_motion;
+        let theme = inner.theme.clone();
         for entry in inner.entries.iter_mut().filter(|entry| !entry.engine) {
             let mut saved = Vec::new();
             for file in &mut entry.watches {
@@ -1024,7 +1090,11 @@ impl UiState {
                 continue;
             }
             changed = true;
-            self.reload(entry, &saved, reduce);
+            if entry.menu.is_some() {
+                self.reload_menu(entry, theme.as_deref(), reduce);
+            } else {
+                self.reload(entry, &saved, reduce);
+            }
         }
         changed
     }

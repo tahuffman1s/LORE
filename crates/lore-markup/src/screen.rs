@@ -156,6 +156,24 @@ impl Screen {
         Ok(())
     }
 
+    /// Adds a stylesheet no `<link>` names. With `first` it applies before
+    /// every linked sheet (add it before them: sheets with the same place
+    /// apply in the order they were added), as a base the page builds on;
+    /// otherwise after every sheet and `<style>` block, so its rules win.
+    /// `file` names it in messages.
+    pub fn add_unlinked_stylesheet(
+        &mut self,
+        file: &str,
+        css: &str,
+        first: bool,
+    ) -> Result<(), MarkupError> {
+        let key = if first { 0 } else { u32::MAX };
+        self.styles
+            .add_css(file, css, 1, 1, key, self.doc.interner_mut())?;
+        self.dirty = true;
+        Ok(())
+    }
+
     /// Advances animation by one tick. Transitions and keyframe animations
     /// move on; the next [`frame`](Screen::frame) shows the result.
     pub fn tick(&mut self) {

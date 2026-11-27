@@ -115,7 +115,12 @@ pub(crate) fn make_tables(lua: &Lua, game: &Table) -> mlua::Result<()> {
 
 /// Runs every built-in script in `lua`. Their text is kept in
 /// `shared.modules` so an error in one shows the line.
+///
+/// Each is handed one table, as `...`: the functions only the engine's own
+/// scripts have (see `ui::menus::private_table`). Both get the same table,
+/// so the menu kit can leave things on it for the pause menu.
 pub(crate) fn run(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
+    let private = crate::ui::menus::private_table(lua, shared)?;
     for builtin in &BUILTINS {
         shared
             .modules
@@ -125,7 +130,7 @@ pub(crate) fn run(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         let chunk = lua
             .load(builtin.source)
             .set_name(format!("@{}", builtin.name));
-        within_time_limit(shared, || chunk.exec())?;
+        within_time_limit(shared, || chunk.call::<mlua::MultiValue>(private.clone()))?;
     }
     Ok(())
 }

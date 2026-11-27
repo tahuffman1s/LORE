@@ -1,0 +1,445 @@
+/* How the engine's menus look: the pause menu, the settings and Controls,
+   the question before quitting, the on-screen keyboard, and every menu a
+   game makes with game.menu.
+
+   It is in two parts. First the variables, on body: every colour, size,
+   corner and time the menus use. Change one and every menu follows. A theme
+   (game.ui.theme("parchment")) is a sheet read after this one that sets
+   them again, and adds a few rules of its own. A game's ui/menus.css is
+   read last, so what it says wins.
+
+   Then the parts, which use only the variables. The class on body says
+   which screen it is: .game-menu, .pause-menu, .settings-menu, .quit-menu or
+   .menu-keyboard. The menu kit adds .shut to body while a screen is closed.
+
+   Sizes are pixels on a screen 1080 high. Words are 28px and the smallest
+   are 22px, to be read from a sofa. */
+
+body {
+  /* Colours. The first eleven are game.menu.style's: a game that sets
+     game.menu.style.back sets --menu-back, and so on. */
+  --menu-back: rgba(12, 14, 19, 0.92);
+  --menu-chosen: rgba(255, 255, 255, 0.16);
+  --menu-words: #ffffff;
+  --menu-chosen-words: #ffd25a;
+  --menu-quiet: rgba(255, 255, 255, 0.62);
+  --menu-on: #7ee08a;
+  --menu-off: rgba(255, 255, 255, 0.5);
+  --menu-bar: #6fa8ff;
+  --menu-knob: #ffffff;
+  --menu-accent: transparent;
+  --menu-shadow: rgba(0, 0, 0, 0.45);
+  --menu-shade: rgba(0, 0, 0, 0.6);
+  --menu-ring: var(--menu-chosen-words);
+  --menu-edge: rgba(255, 255, 255, 0.1);
+  --menu-track: rgba(255, 255, 255, 0.18);
+  --menu-key: rgba(255, 255, 255, 0.1);
+
+  /* Words. */
+  --menu-font: sans-serif;
+  --menu-text: 28px;
+  --menu-small: 22px;
+  --menu-tab: 30px;
+  --menu-weight: normal;
+  --menu-tab-weight: bold;
+  --menu-tab-case: none;
+  --menu-tab-spacing: normal;
+
+  /* Shape. */
+  --menu-radius: 12px;
+  --menu-row-radius: 8px;
+  --menu-line: 1px;
+  --menu-ring-width: 2px;
+  --menu-pad: 14px;
+  --menu-row: 44px;
+
+  /* Motion. Reduce motion (a player's setting) stops every one of them. */
+  --menu-open: 0.16s;
+  --menu-move: 0.09s;
+  --menu-ease: ease-out;
+  --menu-rise: 14px;
+
+  font-family: var(--menu-font);
+  font-size: var(--menu-text);
+  font-weight: var(--menu-weight);
+  color: var(--menu-words);
+}
+
+body.shut {
+  visibility: hidden;
+}
+
+/* ---------------------------------------------------------------- panel */
+
+#shade {
+  display: none;
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: var(--menu-shade);
+}
+
+#shade.on {
+  display: block;
+}
+
+#menu {
+  position: absolute;
+  left: 40px;
+  top: 40px;
+  width: 820px;
+  padding: 0 var(--menu-pad) 0 var(--menu-pad);
+  background-color: var(--menu-back);
+  border: var(--menu-line) solid var(--menu-edge);
+  border-top: 3px solid var(--menu-accent);
+  border-radius: var(--menu-radius);
+  box-shadow: 0 10px 34px var(--menu-shadow);
+  transition: opacity var(--menu-open) var(--menu-ease),
+    transform var(--menu-open) var(--menu-ease);
+}
+
+.pause-menu #menu,
+.settings-menu #menu,
+.quit-menu #menu {
+  width: 900px;
+}
+
+body.shut #menu {
+  opacity: 0;
+  transform: translateY(var(--menu-rise));
+  transition: none;
+}
+
+/* ----------------------------------------------------------------- tabs */
+
+#tabs {
+  display: flex;
+  height: 64px;
+  align-items: center;
+  column-gap: 8px;
+}
+
+.tab {
+  padding: 4px 18px;
+  font-size: var(--menu-tab);
+  font-weight: var(--menu-tab-weight);
+  text-transform: var(--menu-tab-case);
+  letter-spacing: var(--menu-tab-spacing);
+  color: var(--menu-quiet);
+  white-space: nowrap;
+  border-bottom: 3px solid transparent;
+  border-radius: var(--menu-row-radius);
+  transition: color var(--menu-move) var(--menu-ease),
+    background-color var(--menu-move) var(--menu-ease),
+    border-bottom-color var(--menu-move) var(--menu-ease);
+}
+
+/* The tab in front is brighter and underlined: not told by colour alone. */
+.tab.current {
+  color: var(--menu-words);
+  background-color: var(--menu-chosen);
+  border-bottom-color: var(--menu-ring);
+}
+
+/* A screen of one menu shows its title alone, plain. */
+#tabs.single .tab {
+  padding-left: 14px;
+  color: var(--menu-words);
+  background-color: transparent;
+  border-bottom-color: transparent;
+}
+
+/* ----------------------------------------------------------------- rows */
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--menu-row);
+  padding: 0 14px 0 20px;
+  border: var(--menu-ring-width) solid transparent;
+  border-radius: var(--menu-row-radius);
+  white-space: nowrap;
+  transition: background-color var(--menu-move) var(--menu-ease),
+    border-color var(--menu-move) var(--menu-ease);
+}
+
+/* The row the player is on: a fill, a ring, and a mark at its left, so it
+   shows on any colour and to a player who does not tell colours apart. */
+.row.chosen {
+  background-color: var(--menu-chosen);
+  border-color: var(--menu-ring);
+}
+
+.mark {
+  position: absolute;
+  left: 5px;
+  top: 25%;
+  width: 4px;
+  height: 50%;
+  border-radius: 2px;
+  background-color: var(--menu-ring);
+  opacity: 0;
+  transform: scaleY(0.2);
+  transition: opacity var(--menu-move) var(--menu-ease),
+    transform var(--menu-move) var(--menu-ease);
+}
+
+.row.chosen .mark {
+  opacity: 1;
+  transform: none;
+}
+
+.label {
+  width: 300px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.row.chosen .label {
+  color: var(--menu-chosen-words);
+}
+
+.value {
+  flex-grow: 1;
+  overflow: hidden;
+}
+
+.info .label,
+.info .value {
+  color: var(--menu-quiet);
+}
+
+.info .label {
+  width: auto;
+  margin-right: 24px;
+}
+
+/* A toggle says on or off in words, and shows a switch. */
+.switch {
+  position: relative;
+  width: 52px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 13px;
+  background-color: var(--menu-off);
+  transition: background-color var(--menu-move) var(--menu-ease);
+}
+
+.switch .knob {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background-color: var(--menu-knob);
+  transition: left var(--menu-move) var(--menu-ease);
+}
+
+.toggle .value {
+  color: var(--menu-off);
+}
+
+.toggle.on .value {
+  color: var(--menu-on);
+}
+
+.toggle.on .switch {
+  background-color: var(--menu-on);
+}
+
+.toggle.on .switch .knob {
+  left: 29px;
+}
+
+/* A slider: the number, then a bar with a knob. */
+.track {
+  position: relative;
+  width: 210px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background-color: var(--menu-track);
+}
+
+.track .fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 6px;
+  background-color: var(--menu-bar);
+}
+
+.track .knob {
+  position: absolute;
+  top: -7px;
+  width: 10px;
+  height: 26px;
+  margin-left: -5px;
+  border-radius: 4px;
+  background-color: var(--menu-knob);
+}
+
+/* A choice: the word between two arrows. */
+.choice .value {
+  display: flex;
+  align-items: center;
+}
+
+.arrow {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  border-left: 3px solid var(--menu-quiet);
+  border-top: 3px solid var(--menu-quiet);
+}
+
+.arrow.back {
+  margin-right: 16px;
+  transform: rotate(-45deg);
+}
+
+.arrow.next {
+  margin-left: 16px;
+  transform: rotate(135deg);
+}
+
+.row.chosen .arrow {
+  border-color: var(--menu-ring);
+}
+
+/* A text box: the words, and a caret while it is typed into. */
+.text-box.empty .value {
+  color: var(--menu-quiet);
+  font-style: italic;
+}
+
+.caret {
+  display: none;
+  width: 3px;
+  height: 30px;
+  margin-left: 2px;
+  background-color: var(--menu-ring);
+  animation: menu-blink 1s step-end infinite;
+}
+
+.typing .caret,
+#typed-row .caret {
+  display: block;
+}
+
+.text-box .value {
+  display: flex;
+  align-items: center;
+}
+
+.text-box.typing {
+  border-color: var(--menu-ring);
+}
+
+/* ------------------------------------------------------- foot of a menu */
+
+#more {
+  height: 30px;
+  padding-left: 14px;
+  font-size: var(--menu-small);
+  color: var(--menu-quiet);
+}
+
+#keys {
+  height: 52px;
+  padding: 12px 0 0 14px;
+  font-size: var(--menu-small);
+  color: var(--menu-quiet);
+  border-top: var(--menu-line) solid var(--menu-edge);
+}
+
+/* ----------------------------------------------------- on-screen keyboard */
+
+.menu-keyboard #board {
+  position: fixed;
+  left: calc(50vw - 420px);
+  bottom: 24px;
+  width: 840px;
+  padding: 16px 30px 12px 30px;
+  background-color: var(--menu-back);
+  border: var(--menu-line) solid var(--menu-edge);
+  border-radius: var(--menu-radius);
+  box-shadow: 0 10px 34px var(--menu-shadow);
+  transition: opacity var(--menu-open) var(--menu-ease),
+    transform var(--menu-open) var(--menu-ease);
+}
+
+body.shut #board {
+  opacity: 0;
+  transform: translateY(var(--menu-rise));
+  transition: none;
+}
+
+#typed-row {
+  display: flex;
+  align-items: center;
+  height: 46px;
+  margin-bottom: 8px;
+  font-size: 30px;
+}
+
+.keyrow {
+  display: flex;
+  column-gap: 6px;
+  margin-bottom: 6px;
+}
+
+.keyrow.home {
+  padding-left: 39px;
+}
+
+.key {
+  width: 72px;
+  height: 52px;
+  padding-top: 9px;
+  flex-shrink: 0;
+  text-align: center;
+  background-color: var(--menu-key);
+  border: var(--menu-ring-width) solid transparent;
+  border-radius: var(--menu-row-radius);
+  transition: background-color var(--menu-move) var(--menu-ease),
+    border-color var(--menu-move) var(--menu-ease);
+}
+
+.key.wide {
+  width: 150px;
+}
+
+.key.space {
+  width: 300px;
+}
+
+.key.chosen {
+  background-color: var(--menu-chosen);
+  border-color: var(--menu-ring);
+  color: var(--menu-chosen-words);
+}
+
+/* Shift while capitals are on: lit and underlined, not told by colour
+   alone. */
+.key.on {
+  color: var(--menu-on);
+  border-bottom-color: var(--menu-on);
+}
+
+#hints {
+  height: 36px;
+  padding-top: 8px;
+  font-size: var(--menu-small);
+  color: var(--menu-quiet);
+}
+
+@keyframes menu-blink {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+}

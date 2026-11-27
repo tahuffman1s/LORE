@@ -25,10 +25,17 @@ use crate::images::HudImageInfo;
 /// Which font family a name is: 0 is the engine's own, and a game's follow
 /// from 1. A name nobody has is the engine's own.
 pub(crate) fn family_id(fonts: &[String], name: &str) -> u16 {
-    let wanted = name.trim().to_lowercase();
+    // Compared a letter at a time, so a frame asks for no memory.
+    let wanted = name.trim();
+    let same = |family: &str| {
+        family
+            .chars()
+            .flat_map(char::to_lowercase)
+            .eq(wanted.chars().flat_map(char::to_lowercase))
+    };
     fonts
         .iter()
-        .position(|family| family.to_lowercase() == wanted)
+        .position(|family| same(family))
         .and_then(|place| u16::try_from(place + 1).ok())
         .unwrap_or(0)
 }

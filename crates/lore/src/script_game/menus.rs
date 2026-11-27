@@ -39,6 +39,8 @@ struct Played {
     closed: bool,
     /// The texts of the last frame.
     drawn: Vec<Words>,
+    /// The colours of the boxes of one colour in the last frame, as bytes.
+    colours: Vec<[u8; 3]>,
     /// Whether a mistake in the game's script fails the test.
     strict: bool,
 }
@@ -86,6 +88,7 @@ impl Played {
             changes: 0,
             closed: false,
             drawn: Vec::new(),
+            colours: Vec::new(),
             strict,
         };
         played.step();
@@ -119,12 +122,29 @@ impl Played {
             self.changes += 1;
         }
         self.closed |= frame.closing();
-        self.drawn = frame
-            .take_ui()
+        let ui = frame.take_ui();
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "colours from 0 to 1, as bytes"
+        )]
+        let byte = |c: f32| (c * 255.0).round() as u8;
+        self.colours = (ui.draw().iter())
+            .filter_map(|draw| match draw {
+                Draw::Rect { color, .. }
+                | Draw::Box {
+                    fill: lore_ui::Fill::Color(color),
+                    ..
+                } => Some([byte(color.r), byte(color.g), byte(color.b)]),
+                _ => None,
+            })
+            .collect();
+        self.drawn = ui
             .draw()
             .iter()
             .filter_map(|draw| match draw {
-                Draw::Text { text, position, .. } => Some((text.to_owned(), position)),
+                // A page keeps a typed space as a space that does not break.
+                Draw::Text { text, position, .. } => Some((text.replace('\u{a0}', " "), position)),
                 Draw::Rect { .. }
                 | Draw::Turned { .. }
                 | Draw::Box { .. }
@@ -183,12 +203,15 @@ impl Played {
         self.input.map().set_name(self.input.active_set())
     }
 
-    /// What the menu says beside the row called `label`.
+    /// What the menu says beside the row called `label`: the first words
+    /// to its right on the same line, or nothing.
     fn value_of(&self, label: &str) -> String {
-        let at = (self.drawn.iter())
-            .position(|(text, _)| text == label)
-            .unwrap_or_else(|| panic!("\"{label}\" is not among {:?}", self.words()));
-        self.drawn[at + 1].0.clone()
+        let (_, [x, y]) = self.find(label);
+        (self.drawn.iter())
+            .filter(|(_, [tx, ty])| *tx > x && (ty - y).abs() < 4.0)
+            .min_by(|a, b| a.1[0].total_cmp(&b.1[0]))
+            .map(|(text, _)| text.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -302,7 +325,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     }
     assert!(played.shows("Difficulty") && !played.shows("Music volume"));
     // The difficulty row reads the game's own steps by name.
-    assert_eq!(played.value_of("Difficulty"), "<  Standard  >");
+    assert_eq!(played.value_of("Difficulty"), "Standard");
 
     // Left on every row of every tab: a number goes down a step, a choice
     // back a word, and a toggle over. Night brightness starts at its least,
@@ -331,6 +354,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             difficulty: 0.0,
             game_speed: 90.0,
             fall_damage: false,
+            reduce_motion: true,
             volume: 95.0,
             music_volume: 95.0,
             speech_volume: 95.0,
@@ -369,8 +393,9 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
         "one change for each setting"
     );
     // The menu shows what is in force.
-    assert_eq!(played.value_of("Field of view"), "73");
-    assert_eq!(played.value_of("Upscaling"), "<  native  >");
+    // (The tab is longer than the screen and has scrolled to its end.)
+    assert_eq!(played.value_of("Frame rate limit"), "390");
+    assert_eq!(played.value_of("Upscaling"), "native");
     assert_eq!(played.value_of("Vsync"), "off");
     // Changing the rumble lets the hand feel how strong it now is.
     assert!(played.host().last_error().is_none());
@@ -427,7 +452,7 @@ fn the_menu_starts_with_the_settings_the_player_has() {
     assert_eq!(played.value_of("Volume"), "40");
     played.tap(Key::E);
     played.tap(Key::E);
-    assert_eq!(played.value_of("Upscaling"), "<  performance  >");
+    assert_eq!(played.value_of("Upscaling"), "performance");
     // Nothing was changed, so nothing was asked of the engine.
     assert_eq!(played.changes, 0);
     assert_eq!(played.settings, theirs);
@@ -557,7 +582,7 @@ fn a_mouse_alone_works_the_menu() {
     // choice goes on a word.
     played.click("Vsync");
     assert!(!played.settings.vsync);
-    let (_, [x, y]) = played.find("<  quality  >");
+    let (_, [x, y]) = played.find("quality");
     played
         .input
         .set_pointer(Some([x + 140.0, y + 8.0]), [1920.0, 1080.0]);
@@ -569,6 +594,11 @@ fn a_mouse_alone_works_the_menu() {
     played.input.roll_wheel(1.0);
     played.step();
     assert_eq!(played.settings.field_of_view, 75.0);
+    // The tab is longer than the screen: the wheel, off the sliders,
+    // scrolls it down to Back.
+    played.point_at("Vsync");
+    played.input.roll_wheel(-50.0);
+    played.step();
     played.click("Back");
     played.click("Resume");
     assert!(!played.host().paused());
@@ -825,9 +855,9 @@ fn the_planetarium_time_tab_runs_and_turns_the_clock() {
     played.tap(Key::E);
     assert!(played.shows("Time lapse"), "{:?}", played.words());
     assert_eq!(played.value_of("Date"), "Sun 4 Aug 2024");
-    assert_eq!(played.value_of("Time lapse"), "<  Real time  >");
+    assert_eq!(played.value_of("Time lapse"), "Real time");
     played.tap(Key::ArrowRight);
-    assert_eq!(played.value_of("Time lapse"), "<  10x  >");
+    assert_eq!(played.value_of("Time lapse"), "10x");
     played.tap(Key::ArrowDown);
     played.tap(Key::ArrowRight);
     assert_eq!(played.value_of("Hour"), "22:45");
@@ -912,7 +942,8 @@ fn a_game_that_is_only_main_luau_has_the_pause_menu_from_the_engine() {
 #[test]
 fn the_pause_menu_is_drawn_over_the_pieces_the_game_makes_after_it() {
     // A game's own HUD, made after the engine's menu was set up and on a
-    // layer of its own, is still under the pause menu.
+    // layer of its own, is still under the pause menu: the menu is a page,
+    // drawn after the whole HUD, and adds no HUD pieces of its own.
     let main = r#"
         local over = game.hud.box({ width = 8000, height = 4000, layer = 50 })
         over.color = "red"
@@ -929,9 +960,7 @@ fn the_pause_menu_is_drawn_over_the_pieces_the_game_makes_after_it() {
         .filter(|(_, visible)| *visible)
         .map(|(layer, _)| *layer)
         .collect();
-    assert!(shown.windows(2).all(|pair| pair[0] <= pair[1]), "{shown:?}");
-    assert_eq!(shown.first(), Some(&50));
-    assert_eq!(shown.last(), Some(&100));
+    assert_eq!(shown, [50]);
 }
 
 #[test]
@@ -1055,7 +1084,7 @@ fn a_change_tells_onchange_the_new_value_and_a_script_setting_the_value_does_not
     played.tap(Key::ArrowDown);
     played.tap(Key::ArrowRight);
     assert!(played.shows("mode b"), "{:?}", played.words());
-    assert_eq!(played.value_of("Mode"), "<  b  >");
+    assert_eq!(played.value_of("Mode"), "b");
     // The button sets the slider's value and label from the script: the
     // screen follows, and onChange is not called (still three changes).
     played.tap(Key::ArrowDown);
@@ -1951,11 +1980,11 @@ fn a_game_that_turns_on_switch_view_and_lock_on_sees_them_share_select_and_the_b
     let mut played = Played::on_bindings_page(&game);
     played.go_to("Open map");
     played.tap(GamepadButton::DpadDown);
-    assert_eq!(played.value_of("Open map"), "View  (also Switch view)");
+    assert_eq!(played.value_of("Open map"), "View (also Switch view)");
     played.pad_choose("Open map");
     played.tap(GamepadButton::GamepadSouth);
     played.tap(GamepadButton::LeftBumper);
-    assert_eq!(played.page_value("Open map"), "LB  (also Lock on)");
+    assert_eq!(played.page_value("Open map"), "LB (also Lock on)");
 }
 
 #[test]
@@ -2068,7 +2097,7 @@ fn a_direction_takes_a_key_for_each_way_in_turn_on_a_keyboard() {
     );
     played.tap(Key::L);
     assert_eq!(played.bound("move"), "LeftStick,I/K/J/L");
-    assert_eq!(played.page_value("Move"), "I J K L  (also Ride)");
+    assert_eq!(played.page_value("Move"), "I J K L (also Ride)");
 
     // One direction takes two: the way that lessens, then the way that adds.
     played.press_row("Lean");
@@ -2121,8 +2150,8 @@ fn the_page_says_when_a_button_is_used_twice_and_marks_both_rows() {
         "{:?}",
         played.words()
     );
-    assert_eq!(played.page_value("Open map"), "M  (also Map)");
-    assert_eq!(played.page_value("Map"), "M  (also Open map)");
+    assert_eq!(played.page_value("Open map"), "M (also Map)");
+    assert_eq!(played.page_value("Map"), "M (also Open map)");
     // A button nothing else has is not told off.
     played.press_row("Open map");
     played.tap(Key::F9);
@@ -2139,8 +2168,8 @@ fn every_clash_that_stands_is_marked_but_not_the_pairs_the_engine_shares() {
     );
     let mut played = Played::on_bindings_page(&main);
     // Nothing was rebound on the page: the clash is there from the start.
-    assert_eq!(played.page_value("Wave"), "M  (also Map)");
-    assert_eq!(played.page_value("Map"), "M  (also Wave)");
+    assert_eq!(played.page_value("Wave"), "M (also Map)");
+    assert_eq!(played.page_value("Map"), "M (also Wave)");
     // Aim and Block share right click on purpose.
     assert_eq!(played.page_value("Aim"), "Right click");
     assert_eq!(played.page_value("Block"), "Right click");
@@ -2224,7 +2253,7 @@ fn the_wheel_scrolls_a_long_menu() {
     played.input.roll_wheel(-1.0);
     played.step();
     assert!(!played.shows("Row 1"), "{:?}", played.words());
-    assert!(played.shows("… more above     … more below"));
+    assert!(played.shows("… more above and below"));
     // The first row on show is where the first was, three rows on, and the
     // chosen row came into view with it.
     assert_eq!(played.find("Row 4").1, top);
@@ -2281,7 +2310,7 @@ fn a_short_menu_is_laid_out_as_it_always_was() {
     // The rows are a row apart and start under the tabs; a menu of more
     // rows starts the same.
     for (number, row) in ["Row 1", "Row 2", "Row 3"].into_iter().enumerate() {
-        assert_eq!(played.find(row).1, [x, y + 34.0 * number as f32], "{row}");
+        assert_eq!(played.find(row).1, [x, y + 44.0 * number as f32], "{row}");
     }
     assert!(!played.shows("… more below") && !played.shows("… more above"));
     played.input.roll_wheel(-1.0);
@@ -2314,7 +2343,7 @@ fn a_reset_on_one_tab_leaves_the_others_and_the_dial_alone() {
     played.tap(Key::Enter);
     // The dial one step harder, on the Gameplay tab.
     played.tap(Key::ArrowRight);
-    assert_eq!(played.value_of("Difficulty"), "<  Hard  >");
+    assert_eq!(played.value_of("Difficulty"), "Hard");
     assert_eq!(played.settings.difficulty, 100.0);
     // The volume down on the Sound tab, and that tab put back.
     played.tap(Key::E);
@@ -2328,7 +2357,7 @@ fn a_reset_on_one_tab_leaves_the_others_and_the_dial_alone() {
     played.tap(GamepadButton::LeftBumper);
     played.press_row("Reset all to defaults");
     played.go_to("Difficulty");
-    assert_eq!(played.value_of("Difficulty"), "<  Standard  >");
+    assert_eq!(played.value_of("Difficulty"), "Standard");
     assert_eq!(played.settings.difficulty, 50.0);
     assert_eq!(played.host().difficulty_name().as_ref(), "Standard");
 }
@@ -2347,7 +2376,7 @@ fn steps_a_game_names_later_are_on_the_difficulty_row_when_it_next_opens() {
     played.tap(Key::Escape);
     played.tap(Key::ArrowDown);
     played.tap(Key::Enter);
-    assert_eq!(played.value_of("Difficulty"), "<  Standard  >");
+    assert_eq!(played.value_of("Difficulty"), "Standard");
     played.tap(Key::Escape);
     played.tap(Key::Escape);
     assert!(!played.host().paused());
@@ -2358,7 +2387,219 @@ fn steps_a_game_names_later_are_on_the_difficulty_row_when_it_next_opens() {
     played.tap(Key::Escape);
     played.tap(Key::ArrowDown);
     played.tap(Key::Enter);
-    assert_eq!(played.value_of("Difficulty"), "<  Fair  >");
+    assert_eq!(played.value_of("Difficulty"), "Fair");
     played.tap(Key::ArrowRight);
-    assert_eq!(played.value_of("Difficulty"), "<  Cruel  >");
+    assert_eq!(played.value_of("Difficulty"), "Cruel");
+}
+
+/// A game whose files are `files` besides a `main.luau` of `main`.
+fn game_with(main: &str, files: &[(&str, &str)]) -> Played {
+    let mut scripts = vec![("main.luau".to_owned(), main.to_owned())];
+    scripts.extend(
+        files
+            .iter()
+            .map(|(name, text)| ((*name).to_owned(), (*text).to_owned())),
+    );
+    let game = ScriptGame::from_sources_with_settings(
+        scripts,
+        &ActionMap::standard(),
+        Settings::default(),
+    );
+    Played::of(game, Settings::default(), false)
+}
+
+#[test]
+fn the_engines_menus_are_pages_a_games_menus_css_restyles() {
+    let sheet = "body { --menu-back: #ff0000; --menu-ring: #00ff00; }";
+    let mut played = game_with("", &[("ui/menus.css", sheet)]);
+    played.tap(Key::Escape);
+    assert!(played.shows("Resume"), "{:?}", played.words());
+    assert!(played.colours.contains(&[255, 0, 0]), "the panel is red");
+    assert!(
+        played.colours.contains(&[0, 255, 0]),
+        "the chosen row's mark is green"
+    );
+    assert_eq!(played.host().last_error(), None);
+}
+
+#[test]
+fn a_mistake_in_the_games_menus_css_is_reported_and_the_menus_still_show() {
+    let mut played = game_with("", &[("ui/menus.css", "body { colr: red; }")]);
+    played.tap(Key::Escape);
+    played.step();
+    assert!(played.shows("Resume"), "{:?}", played.words());
+    let error = played
+        .host()
+        .last_error()
+        .expect("the mistake is on the panel");
+    assert_eq!(error.file, "ui/menus.css", "{error:?}");
+    assert!(error.message.contains("colr"), "{error:?}");
+}
+
+#[test]
+fn a_page_of_the_games_own_takes_the_place_of_the_pause_menus() {
+    let page = r#"<div id="menu"><p>The game is resting</p><div id="rows"></div></div>"#;
+    let mut played = game_with("", &[("ui/pause-menu.html", page)]);
+    played.tap(Key::Escape);
+    assert!(played.shows("The game is resting"), "{:?}", played.words());
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    assert!(
+        played.shows("Difficulty"),
+        "Settings opened: {:?}",
+        played.words()
+    );
+    assert!(
+        !played.shows("The game is resting"),
+        "settings keep the engine's page"
+    );
+    // A page with a mistake leaves the engine's page in its place.
+    let mut played = game_with("", &[("ui/pause-menu.html", "<dvi id=\"rows\"></dvi>")]);
+    played.tap(Key::Escape);
+    played.step();
+    assert!(
+        played.shows("Resume") && played.shows("Quit"),
+        "{:?}",
+        played.words()
+    );
+    let error = played
+        .host()
+        .last_error()
+        .expect("the mistake is on the panel");
+    assert_eq!(error.file, "ui/pause-menu.html", "{error:?}");
+}
+
+#[test]
+fn a_theme_is_one_line_and_a_wrong_name_says_the_ones_there_are() {
+    let mut played = game_with(r#"game.ui.theme("parchment")"#, &[]);
+    played.tap(Key::Escape);
+    assert!(played.colours.contains(&[239, 226, 196]), "the paper panel");
+    for (theme, panel) in [("frost", [226, 238, 248]), ("ember", [20, 14, 12])] {
+        let mut played = game_with(&format!("game.ui.theme(\"{theme}\")"), &[]);
+        played.tap(Key::Escape);
+        assert!(played.colours.contains(&panel), "{theme}");
+    }
+    let scripts = [(
+        "main.luau".to_owned(),
+        r#"game.ui.theme("parchmnet")"#.to_owned(),
+    )];
+    let game = ScriptGame::from_sources_with_settings(
+        scripts,
+        &ActionMap::standard(),
+        Settings::default(),
+    );
+    let error = game
+        .host()
+        .last_error()
+        .expect("an unknown look is a mistake");
+    assert!(
+        error.message.contains(r#"game.ui.theme("parchment")"#) && error.message.contains("frost"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_style_colour_the_game_set_is_kept_over_the_theme() {
+    let main = r##"game.ui.theme("frost")
+        game.menu.style.back = "#123456""##;
+    let mut played = game_with(main, &[]);
+    played.tap(Key::Escape);
+    assert!(
+        played.colours.contains(&[0x12, 0x34, 0x56]),
+        "the game's own back"
+    );
+}
+
+#[test]
+fn steps_a_game_names_while_the_menu_is_open_are_on_the_difficulty_row_at_once() {
+    let main = r#"
+        game.input.bind("rename", { "F7", "GamepadSelect" })
+        game.onTick(function()
+            if game.input.justPressed("rename") then
+                game.difficulty.steps = { "Calm", "Brave", "Grim" }
+            end
+        end)
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::Escape);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    played.tap(Key::F7);
+    played.tap(Key::ArrowRight);
+    assert!(
+        ["Calm", "Brave", "Grim"].contains(&played.value_of("Difficulty").as_str()),
+        "{:?}",
+        played.words()
+    );
+}
+
+#[test]
+fn the_gameplay_tab_has_reduce_motion_and_turning_it_stops_what_moves() {
+    let mut played = Played::new();
+    played.tap(GamepadButton::GamepadStart);
+    played.tap(GamepadButton::DpadDown);
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.value_of("Reduce motion"), "off");
+    // Difficulty, game speed, fall damage, then it: A turns it over.
+    for _ in 0..3 {
+        played.tap(GamepadButton::DpadDown);
+    }
+    played.tap(GamepadButton::GamepadSouth);
+    assert!(played.settings.reduce_motion);
+    assert_eq!(played.value_of("Reduce motion"), "on");
+    // The shoulder buttons go through the tabs, and round.
+    played.tap(GamepadButton::RightBumper);
+    assert!(played.shows("Effects volume"), "{:?}", played.words());
+    played.tap(GamepadButton::LeftBumper);
+    played.tap(GamepadButton::LeftBumper);
+    assert!(
+        played.shows("Vsync") || played.shows("Upscaling"),
+        "{:?}",
+        played.words()
+    );
+}
+
+#[test]
+fn a_page_of_the_games_own_without_rows_says_so_and_a_broken_sheet_keeps_a_good_page() {
+    let mut played = game_with("", &[("ui/pause-menu.html", "<p>No rows here</p>")]);
+    played.tap(Key::Escape);
+    played.step();
+    assert!(
+        played.shows("Resume"),
+        "the engine's page: {:?}",
+        played.words()
+    );
+    let error = played.host().last_error().expect("said on the panel");
+    assert!(error.message.contains("#rows"), "{error:?}");
+    let page = r#"<p>Resting</p><div id="rows"></div>"#;
+    let mut played = game_with(
+        "",
+        &[
+            ("ui/pause-menu.html", page),
+            ("ui/menus.css", "body { colr: red; }"),
+        ],
+    );
+    played.tap(Key::Escape);
+    played.step();
+    assert!(
+        played.shows("Resting") && played.shows("Resume"),
+        "{:?}",
+        played.words()
+    );
+}
+
+#[test]
+fn a_style_colour_set_while_the_game_runs_is_on_the_next_menu_that_opens() {
+    let main = r##"
+        game.input.bind("tint", { "F7", "GamepadSelect" })
+        game.onTick(function()
+            if game.input.justPressed("tint") then game.menu.style.back = "#123456" end
+        end)
+    "##;
+    let mut played = game_with(main, &[]);
+    played.tap(Key::Escape);
+    played.tap(Key::Escape);
+    played.tap(Key::F7);
+    played.tap(Key::Escape);
+    assert!(played.colours.contains(&[0x12, 0x34, 0x56]));
 }

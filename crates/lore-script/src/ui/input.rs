@@ -15,8 +15,8 @@ use lore_markup::{
 };
 
 use super::{
-    DrawEnv, Entry, Inner, Measurer, ScreenId, SettingsSync, UiState, entry_mut, has_control,
-    keyboard, tick_entries,
+    DrawEnv, Entry, Inner, Measurer, ScreenId, SettingsSync, UiState, entry_mut, keyboard,
+    tick_entries,
 };
 
 /// How far one notch of the wheel scrolls a list, in units of the page.
@@ -158,12 +158,12 @@ fn special(entry: &Entry, kind: FiredKind) -> Fired {
 
 /// The top screen that takes input, if any.
 fn top_of(inner: &Inner) -> Option<ScreenId> {
-    inner.stack.iter().rev().copied().find(|id| {
-        inner
-            .entries
-            .iter()
-            .any(|e| e.id == *id && e.page.as_ref().is_some_and(has_control))
-    })
+    inner
+        .stack
+        .iter()
+        .rev()
+        .copied()
+        .find(|id| inner.entries.iter().any(|e| e.id == *id && e.takes_input()))
 }
 
 /// Fires the text box's `onchange` if it holds other text than when it took
@@ -235,6 +235,7 @@ impl UiState {
             fonts: env.fonts,
             images: env.images,
         };
+        inner.pointer = controls.pointer;
         let top = top_of(inner);
         // A press (a slider being dragged) belongs to the screen on top: when
         // another screen is on top, or this one is closed, it is over.

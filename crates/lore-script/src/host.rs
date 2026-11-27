@@ -3327,6 +3327,9 @@ impl ScriptHost {
                 fonts: &self.fonts,
                 images: &self.images,
             };
+            // The player's own setting stops what moves, as the script's does.
+            self.ui
+                .set_player_reduce_motion(self.setting_on("reduce_motion") == Some(true));
             self.ui.step(&controls, &env, self.clock.rate(), &|name| {
                 self.tools.label(&actions, name)
             })
@@ -3337,6 +3340,9 @@ impl ScriptHost {
         });
         for (name, volume) in &stepped.sounds {
             self.audio.play_named(name, *volume);
+        }
+        if self.ui.take_error_news() {
+            self.sync_ui_error();
         }
         self.screens_take_input(stepped.open);
         self.screens_type(stepped.typing);

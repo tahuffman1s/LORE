@@ -1,0 +1,64 @@
+/* Frost: pale, cool glass with dark words, round pills and a blue ring.
+   Pick it with game.ui.theme("frost"), or copy it to your game's
+   ui/menus.css and change what you like. */
+
+body {
+  --menu-back: rgba(226, 238, 248, 0.9);
+  --menu-chosen: rgba(42, 127, 209, 0.16);
+  --menu-words: #0f1d2b;
+  --menu-chosen-words: #13508c;
+  --menu-quiet: #4a5d70;
+  --menu-on: #17805a;
+  --menu-off: #8b9aab;
+  --menu-bar: #2a7fd1;
+  --menu-knob: #ffffff;
+  --menu-accent: transparent;
+  --menu-shadow: rgba(10, 30, 60, 0.35);
+  --menu-shade: rgba(160, 190, 220, 0.35);
+  --menu-ring: #2a7fd1;
+  --menu-edge: rgba(255, 255, 255, 0.9);
+  --menu-track: rgba(15, 29, 43, 0.14);
+  --menu-key: rgba(255, 255, 255, 0.7);
+
+  --menu-weight: normal;
+  --menu-tab-weight: normal;
+
+  --menu-radius: 26px;
+  --menu-row-radius: 22px;
+  --menu-line: 2px;
+  --menu-pad: 18px;
+
+  --menu-open: 0.2s;
+  --menu-move: 0.12s;
+  --menu-rise: 0px;
+}
+
+/* It grows a little as it opens, instead of rising. */
+body.shut #menu,
+body.shut #board {
+  transform: scale(0.97);
+}
+
+/* Tabs are pills; the one in front is filled. */
+.tab {
+  border-radius: 22px;
+  border-bottom-width: 0;
+}
+
+.tab.current {
+  background-color: var(--menu-ring);
+  color: #ffffff;
+}
+
+.switch .knob,
+.track .knob {
+  box-shadow: 0 1px 4px rgba(10, 30, 60, 0.4);
+}
+
+.track .knob {
+  width: 22px;
+  height: 22px;
+  top: -5px;
+  margin-left: -11px;
+  border-radius: 11px;
+}

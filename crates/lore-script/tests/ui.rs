@@ -1335,3 +1335,44 @@ fn the_complete_small_screen_in_the_page_works() {
     assert!(!play.texts().contains(&"Settings".to_owned()));
     assert_eq!(warned(), Vec::<String>::new());
 }
+
+#[test]
+fn saving_the_games_menus_css_restyles_an_open_menu_at_once() {
+    let folder =
+        GameFolder::new("game.menu.new(\"Pack\", { game.menu.button(\"Rope\") }):open()\n");
+    let mut host = folder.open();
+    run(&mut host, 2);
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let seen = draw(&host);
+    assert!(seen.texts.iter().any(|t| t == "Rope"), "{seen:?}");
+    assert!(!seen.boxes.contains(&red));
+    folder.save("ui/menus.css", "body { --menu-back: #ff0000; }");
+    wait_until(&mut host, |host| draw(host).boxes.contains(&red));
+    run(&mut host, 2);
+    assert!(
+        draw(&host).texts.iter().any(|t| t == "Rope"),
+        "the rows are put back"
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
+
+#[test]
+fn lore_check_reads_the_games_menu_files_before_any_menu_opens() {
+    let folder = GameFolder::new("print(\"hello\")\n");
+    folder.save("ui/menus.css", "body { --menu-back: #102030; }");
+    let host = folder.open();
+    assert!(host.check_screens().mistakes.is_empty());
+    folder.save("ui/menus.css", "body { colr: red; }");
+    folder.save("ui/quit-menu.html", "<dvi></dvi>");
+    let found = host.check_screens().mistakes;
+    assert!(
+        found
+            .iter()
+            .any(|m| m.contains("ui/menus.css") && m.contains("colr")),
+        "{found:?}"
+    );
+    assert!(
+        found.iter().any(|m| m.contains("ui/quit-menu.html")),
+        "{found:?}"
+    );
+}

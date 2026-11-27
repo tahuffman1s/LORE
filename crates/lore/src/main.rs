@@ -181,6 +181,22 @@ enum Command {
         /// A game's folder, to show the controls the game's script made for itself too
         folder: Option<PathBuf>,
     },
+    /// Copy a ready-made theme of the menus into a game, to change as you like
+    #[command(
+        after_help = "Examples:\n  lore theme                     List the themes\n  \
+                      lore theme parchment           Write it to ui/menus.css here\n  \
+                      lore theme frost my-game       Write it to my-game/ui/menus.css\n\n\
+                      The file is read after the engine's own sheet for the menus, so what it \
+                      says wins. It\nstarts with the theme's variables (colours, fonts, corners, \
+                      motion): change one and every\nmenu follows. An existing ui/menus.css is \
+                      never written over."
+    )]
+    Theme {
+        /// The theme to copy: parchment, frost or ember. Left out, the themes are listed
+        name: Option<String>,
+        /// The game's folder (the folder you are in if left out)
+        folder: Option<PathBuf>,
+    },
     /// Open a test window that shows what your keyboard, mouse or gamepad is doing
     Demo,
     /// Measure how fast this computer draws a built-in test scene
@@ -361,6 +377,9 @@ fn command() -> Result<(), String> {
             appimage,
         ),
         Some(Command::Controls { folder }) => controls(folder.as_deref()),
+        Some(Command::Theme { name, folder }) => {
+            theme(name.as_deref(), folder.as_deref().unwrap_or(Path::new(".")))
+        }
         Some(Command::Demo) => demo(),
         Some(Command::Bench {
             frames,
@@ -1292,6 +1311,46 @@ fn player_config() -> Config {
         }
     }
     config
+}
+
+/// `lore theme`: writes a ready-made look of the menus to a game's
+/// `ui/menus.css`, or lists them.
+fn theme(name: Option<&str>, folder: &Path) -> Result<(), String> {
+    let names: Vec<&str> = lore::script::MENU_THEMES.iter().map(|(n, _)| *n).collect();
+    let Some(name) = name else {
+        println!(
+            "The ready-made themes of the menus: {}.\nPick one in main.luau with \
+             game.ui.theme(\"{}\"), or copy one to change: lore theme {}",
+            names.join(", "),
+            names[0],
+            names[0]
+        );
+        return Ok(());
+    };
+    let Some((_, css)) = lore::script::MENU_THEMES.iter().find(|(n, _)| *n == name) else {
+        return Err(format!(
+            "there is no theme called \"{name}\". The themes are: {}.",
+            names.join(", ")
+        ));
+    };
+    let ui = folder.join("ui");
+    let path = ui.join("menus.css");
+    if path.exists() {
+        return Err(format!(
+            "{} is there already, and is not written over. Rename it or delete it, then run \
+             lore theme {name} again.",
+            path.display()
+        ));
+    }
+    std::fs::create_dir_all(&ui).map_err(|e| format!("could not make {}: {e}", ui.display()))?;
+    std::fs::write(&path, css).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    println!(
+        "Wrote {}. It is read after the engine's sheet for the menus, so what it says wins: \
+         change a variable at its top and every menu follows. Save it while the game runs to \
+         see it at once.",
+        path.display()
+    );
+    Ok(())
 }
 
 /// `lore demo`: shows live input in a window.

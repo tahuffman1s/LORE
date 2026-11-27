@@ -113,6 +113,7 @@ pub use tools_api::{
     ViewTold,
 };
 pub use ui::ScreensChecked;
+pub use ui::menus::THEMES as MENU_THEMES;
 pub use walk_api::WalkingGround;
 pub use weapon_api::{HeldWeapon, HoldSaid, NoiseTold, SoundName, WeaponHit, WeaponSounds};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};

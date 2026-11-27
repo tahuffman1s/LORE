@@ -2837,9 +2837,12 @@ export type MenuTabs = {
     remove: (self: MenuTabs) -> (),
 }
 
---- How every menu looks: colours (names or hex codes, as the HUD takes them)
---- and the HUD layer. They apply to menus made afterwards, so set them
---- before making menus; the pause menu is made on its first opening.
+--- Colours of every menu, names or hex codes. Each is a variable of the
+--- menus' stylesheet (`back` is `--menu-back`, `chosenWords` is
+--- `--menu-chosen-words`): one you set wins over the theme and your
+--- `ui/menus.css`; one you leave alone is theirs to say. Set them at the top of
+--- main.luau: a menu takes them when it first opens. For more than colours
+--- (fonts, corners, borders, motion), write `ui/menus.css`.
 --- Example: game.menu.style.back = "#101830e0"
 export type MenuStyle = {
     --- Behind the whole menu.
@@ -2869,14 +2872,14 @@ export type MenuStyle = {
     --- A slider's knob.
     --- Example: game.menu.style.knob = "white"
     knob: string,
-    --- A line along the top and a mark by the chosen row; nil (off) unless set.
+    --- A line along the top of each menu; nil leaves it to the stylesheet.
     --- Example: game.menu.style.accent = "#ffd27a"
     accent: string?,
-    --- A shadow behind each menu; nil (off) unless set.
+    --- The shadow behind each menu; nil leaves it to the stylesheet.
     --- Example: game.menu.style.shadow = "#00000066"
     shadow: string?,
-    --- The HUD layer menus are drawn on: higher is over the game's own pieces
-    --- (layer 0 unless you say another). 100 unless set.
+    --- Kept for older games, and read by nothing: menus are pages, drawn over
+    --- the whole HUD.
     --- Example: game.menu.style.layer = 200
     layer: number,
 }
@@ -4966,8 +4969,9 @@ declare game: {
     ---
     --- The settings today, by name: "difficulty" (0 to 100, where a new
     --- game's dial starts and following it; `game.difficulty.name` turns
-    --- this game's), "game_speed" (50 to 100 percent) and "fall_damage"
-    --- (true or false); "volume", "music_volume", "speech_volume" and
+    --- this game's), "game_speed" (50 to 100 percent), "fall_damage" and
+    --- "reduce_motion" (true or false: menus and screens do not slide, fade
+    --- or blink); "volume", "music_volume", "speech_volume" and
     --- "effects_volume" (0 to 100); "mouse_sensitivity" and
     --- "stick_sensitivity" (how fast each turns the view, 0.05 to 5),
     --- "invert_look" (true or false) and "rumble" (0 to 100);
@@ -5105,8 +5109,9 @@ declare game: {
         --- Example: crosshair.visible = not game.menu.anyOpen()
         anyOpen: () -> boolean,
 
-        --- How menus look. It applies to menus made afterwards (the pause
-        --- menu is made on its first opening), so set it before making menus.
+        --- The colours of every menu, the pause menu's too. Set them at the top
+        --- of main.luau. For the rest of the look, `game.ui.theme` and
+        --- `ui/menus.css`.
         --- Example: game.menu.style.accent = "#ffd27a"
         style: MenuStyle,
 
@@ -5305,9 +5310,22 @@ declare game: {
         anyOpen: () -> boolean,
 
         --- Whether movement in screens is left out: things that fade or
-        --- slide jump to where they end. For players who ask for it.
+        --- slide jump to where they end. The player's own setting
+        --- "reduce_motion" (on the pause menu's Gameplay tab) does the same
+        --- whatever this says.
         --- Example: game.ui.reduceMotion = true
         reduceMotion: boolean,
+
+        --- Picks a ready-made theme for the engine's menus (the pause menu,
+        --- settings, Controls, the on-screen keyboard and every `game.menu`):
+        --- "parchment" (warm paper, brown ink), "frost" (pale glass, round
+        --- pills) or "ember" (charcoal and fire, square corners). nil is the
+        --- engine's own look; capitals do not matter. Last wins: the engine's
+        --- sheet, then the theme, then your `ui/menus.css`, then the colours
+        --- in `game.menu.style`. `lore theme parchment` writes the theme to
+        --- `ui/menus.css` to start from.
+        --- Example: game.ui.theme("parchment")
+        theme: (name: string?) -> (),
 
         --- Text with `&`, `<`, `>` and `"` written as HTML would, so a
         --- player's name cannot break the page. Use it for anything that is not

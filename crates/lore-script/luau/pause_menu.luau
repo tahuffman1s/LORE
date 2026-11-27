@@ -29,10 +29,16 @@
 --
 -- A game that carries its own pause_menu.luau (an older game) turns this one
 -- off by requiring it. The screens are built the first time the menu opens, so
--- a game that never opens it pays nothing, and `game.menu.style` (look and
--- layer) applies to what is built then.
+-- a game that never opens it pays nothing.
+--
+-- They are drawn from the engine's pages `pause-menu.html`, `settings-menu.html`
+-- and `quit-menu.html`, styled by `menus.css`, a theme and the game's own
+-- `ui/menus.css`; a game's file of the same name in `ui` takes a page's place.
 
 local menu = game.menu
+
+-- What only the engine's own scripts are handed (see menu.luau).
+local engine = ...
 local pauseMenu = game.pauseMenu
 
 -- The shapes of what the menu kit hands back, as far as this file uses them.
@@ -74,9 +80,6 @@ type Setting = {
     options: { string }?,
 }
 
--- Where the menu is, in pixels on a screen 1080 high.
-local PLACE: { right: number?, down: number?, width: number? } = { right = 40, down = 40, width = 900 }
-
 -- What the gamepad does when the rumble setting is changed, so the player
 -- feels how strong they have made it: both motors, then seconds.
 local RUMBLE_SAMPLE = { 0.6, 0.6, 0.15 }
@@ -97,11 +100,6 @@ local title = "Paused"
 -- Rows the game adds with addRow, shown above Quit.
 local extraRows: { Row } = {}
 
--- The game is dimmed behind the menu, a layer under the menus so a menu of
--- the game's own that opens over this one is not dimmed too, and over the
--- game's own pieces. Far bigger than any screen, so it covers every one.
-local dim: HudBox? = nil
-
 -- Whether the menu is open, and whether closing it lets the game go on:
 -- not if something else had paused it before the menu opened.
 local open = false
@@ -119,9 +117,6 @@ local hiddenControls: { { name: string, at: string } } = {}
 -- The screens, built the first time the menu opens, because the game's own
 -- scripts have run by then.
 local built = false
--- The difficulty steps the settings screen was built with: steps a game
--- names later build it again, so the row offers the steps there are.
-local builtSteps = ""
 local first: Menu?
 local settings: Tabs?
 local settingsStart: Menu?
@@ -138,8 +133,10 @@ local function rowFor(setting: Setting): Row
     local name = setting.name
     -- Difficulty is the game's own steps by name. Turning it changes this
     -- game at once, and the player's setting with it for the next game.
+    -- The row reads the steps each time it is turned, so steps a game
+    -- names while the menu is open are there at once.
     if name == "difficulty" then
-        return menu.choice(setting.label, {
+        local row = menu.choice(setting.label, {
             options = game.difficulty.steps,
             get = function()
                 return game.difficulty.name
@@ -148,6 +145,10 @@ local function rowFor(setting: Setting): Row
                 game.difficulty.name = step
             end,
         })
+        engine.liveOptions(row, function()
+            return game.difficulty.steps
+        end)
+        return row
     end
     local function get()
         return game.settings.get(name)
@@ -394,7 +395,7 @@ local function controlRow(name: string): Row
             end
             refreshClash()
             local also = clashed[name]
-            return if also then words .. "  (also " .. table.concat(also, ", ") .. ")" else words
+            return if also then words .. " (also " .. table.concat(also, ", ") .. ")" else words
         end,
     })
 end
@@ -464,9 +465,6 @@ local function build()
         return
     end
     built = true
-    builtSteps = table.concat(game.difficulty.steps, "\n")
-    dim = game.hud.box({ at = "center", width = 8000, height = 4000, color = "#00000099", layer = menu.style.layer - 1 })
-    dim.visible = false
 
     -- The first screen.
     local rows: { Row } = {
@@ -494,8 +492,10 @@ local function build()
             end,
         })
     )
-    first = menu.new(title, rows, PLACE)
+    first = menu.new(title, rows)
     first.backWord = "resume"
+    -- The game is dimmed behind each of the pause menu's screens.
+    engine.screenFile(first, "pause-menu.html", true)
 
     -- The settings screen: one tab for each heading the settings come
     -- under, in the order the engine lists them.
@@ -554,7 +554,7 @@ local function build()
             })
         )
         table.insert(under, menu.button("Back", { onPress = function() if settings then settings:close() end end }))
-        local page = menu.new(heading, under, PLACE)
+        local page = menu.new(heading, under)
         if withButtons then
             -- The rebind messages stay on the fixed line when the rows scroll.
             page.message = function()
@@ -569,12 +569,14 @@ local function build()
     local ask = menu.new("Quit the game?", {
         menu.button("Keep playing", { onPress = function() if quit then quit:close() end end }),
         menu.button("Quit", { onPress = game.quit }),
-    }, PLACE)
+    })
+    engine.screenFile(ask, "quit-menu.html", true)
     quit = ask
 
     -- A game started with no settings has nothing to put on that screen.
     if #pages > 0 then
         settings = menu.tabs(pages)
+        engine.screenFile(settings, "settings-menu.html", true)
         settingsStart = pages[1]
     end
 end
@@ -594,10 +596,7 @@ local function teardown()
     if quit then
         quit:remove()
     end
-    if dim then
-        dim:remove()
-    end
-    first, settings, settingsStart, quit, dim = nil, nil, nil, nil, nil
+    first, settings, settingsStart, quit = nil, nil, nil, nil
     busy, watch = nil, nil
 end
 
@@ -641,9 +640,6 @@ function methods.open()
     if open then
         return
     end
-    if built and table.concat(game.difficulty.steps, "\n") ~= builtSteps then
-        teardown()
-    end
     build()
     open = true
     resumes = not game.paused()
@@ -652,9 +648,6 @@ function methods.open()
     game.pause()
     -- A rumble that was playing would shake a hand that is now reading.
     game.input.rumble(0, 0)
-    if dim then
-        dim.visible = true
-    end
     if first then
         first.chosen = 1
         first:open()
@@ -680,9 +673,6 @@ function methods.close()
     end
     if quit then
         quit:close()
-    end
-    if dim then
-        dim.visible = false
     end
     if resumes then
         game.resume()

@@ -23,8 +23,13 @@
 -- A gamepad pressing a text box gets an on-screen keyboard instead (d-pad walks,
 -- A types, X erases, Y spaces, a bumper is Shift, Start is done, B cancels);
 -- `menu.onScreenKeyboard = false` leaves that to the game's own keyboard.
--- Style and sounds: `menu.style` (colours, HUD layer) and `menu.sounds` below.
--- Change them before making menus: they apply to menus made afterwards.
+-- Every menu is drawn through a page of HTML and CSS that ships with the
+-- engine (`game-menu.html`, `pause-menu.html` and the others, `menu-keyboard.html`
+-- and `menus.css`), the way a
+-- game's own screens are: `game.ui.theme("parchment")` picks a ready-made
+-- look, a game's `ui/menus.css` restyles every menu, and a file of the same
+-- name in its `ui` folder takes the place of a page. `menu.style` (colours)
+-- and `menu.sounds` are below.
 -- A menu with more rows than fit on the screen shows a window of them and
 -- scrolls by itself: the chosen row stays in view, the mouse wheel scrolls,
 -- and a line says when there is more above or below. Each tab scrolls on its own.
@@ -33,28 +38,33 @@
 
 local menu = game.menu
 
--- Sizes, in pixels on a screen 1080 high.
+-- What only the engine's own scripts are handed: `screen(file)` makes a page
+-- of the engine's menus, `pointer(element)` says whether the pointer is on an
+-- element and how far across, `rect(element)` where it was drawn, and
+-- `reloaded(screen)` whether its files were read again. The pause menu gets
+-- the same table, and the kit leaves `screenFile` on it below.
+local engine = ...
+
+-- Sizes, in pixels on a screen 1080 high, as `menus.css` draws them: used to
+-- work out how many rows fit on the screen.
 local TOP = 64 -- the tabs, above the rows
-local ROW = 34 -- each row
-local FOOT = 52 -- the line of keys below the rows
+local ROW = 44 -- each row
+local FOOT = 54 -- the line of keys below the rows
 local MORE = 30 -- the line that says "more above" or "more below", only on a menu that scrolls
 local EDGE = 40 -- the room kept free at the bottom of the screen
 local WHEEL = 3 -- rows a notch of the mouse wheel scrolls
-local TEXT = 26 -- the size of the words
-local LABEL_WIDE = 270 -- the room for a row's name; its value starts after it
-local BAR_WIDE = 210 -- a slider's bar, at the right of the row
 
--- How the menus look. A game can change any of these before it makes its
--- menus, to give every menu a look of its own. They apply to menus made
--- afterwards (the pause menu is made on its first opening):
+-- How the menus look. Each colour is a variable of `menus.css`: `back` is
+-- `--menu-back`, `chosenWords` is `--menu-chosen-words`, and so on. One a game
+-- changes here is set on every menu when it opens, over the theme and the
+-- game's `ui/menus.css`; one it leaves alone is the stylesheets' to say.
 --
 --     game.menu.style.back = "#101830e0"
---     game.menu.style.accent = "#ffd27a" -- a line along the top and a mark by the chosen row
---     game.menu.style.shadow = "#00000066" -- a shadow behind each menu
+--     game.menu.style.accent = "#ffd27a" -- a line along the top of each menu
+--     game.menu.style.shadow = "#00000066" -- the shadow behind each menu
 --
--- Colours are names or hex codes, as the HUD takes them. `accent` and
--- `shadow` are off (nil) unless a game says them; each costs a few HUD
--- pieces a menu.
+-- Colours are names or hex codes. `layer` is kept for older games: the menus
+-- are drawn over the HUD whatever it says.
 menu.style = {
     back = "#0c0e13e6", -- behind the whole menu: dark, so the words read on any sky
     chosen = "#ffffff2e", -- behind the chosen row, and the tab in front
@@ -97,8 +107,58 @@ local function sound(name: string?)
         game.audio.play(name, { volume = menu.sounds.volume })
     end
 end
--- Behind the rows that are not chosen: clear, but still under the pointer.
-local NOT_CHOSEN = "#00000000"
+
+-- The colours `menu.style` starts with, and the variable of `menus.css` each
+-- is. A colour still at its start is left to the stylesheets.
+local STYLE_START: { [string]: any } = table.clone(menu.style)
+local STYLE_VARS: { [string]: string } = {
+    back = "--menu-back",
+    chosen = "--menu-chosen",
+    words = "--menu-words",
+    chosenWords = "--menu-chosen-words",
+    quiet = "--menu-quiet",
+    on = "--menu-on",
+    off = "--menu-off",
+    bar = "--menu-bar",
+    knob = "--menu-knob",
+    accent = "--menu-accent",
+    shadow = "--menu-shadow",
+}
+
+-- The elements the kit changes, and what it last put on each, so a picture
+-- in which nothing changed changes nothing on the page.
+local said: { [any]: any } = setmetatable({}, { __mode = "k" }) :: any
+
+-- Sets `key` of `element` to `value` unless it is that already.
+local function put(element: any, key: string, value: any)
+    local last = said[element]
+    if not last then
+        last = {}
+        said[element] = last
+    end
+    if last[key] ~= value then
+        last[key] = value
+        element[key] = value
+    end
+end
+
+-- Puts the class `name` on `element` or takes it off, unless it is so already.
+local function mark(element: any, name: string, on: boolean)
+    local last = said[element]
+    if not last then
+        last = {}
+        said[element] = last
+    end
+    local key = "." .. name
+    if last[key] ~= on then
+        last[key] = on
+        if on then
+            element:addClass(name)
+        else
+            element:removeClass(name)
+        end
+    end
+end
 
 -- ------------------------------------------------------------------ rows
 
@@ -136,14 +196,16 @@ type RowState = {
     blink: number,
     -- The menu it is in, once it is in one.
     owner: any,
-    box: any,
-    name: any, -- the HUD text that shows `label`
-    shown: any, -- the HUD text that shows the value
-    bar: any,
-    knob: any,
-    -- All of the pieces above that the row has, for showing, hiding and
-    -- asking which is under the pointer.
-    pieces: { any },
+    -- Its elements on the page, while its menu is the one shown: the row,
+    -- its name, its value, the word of a text box or a choice, and a
+    -- slider's bar with the styles of its fill and knob.
+    el: any,
+    labelEl: any,
+    valueEl: any,
+    wordEl: any,
+    trackEl: any,
+    fillStyle: any,
+    knobStyle: any,
 }
 
 local states: { [any]: RowState } = setmetatable({}, { __mode = "k" }) :: any
@@ -193,14 +255,22 @@ local function current(s: RowState): any
     return s.value
 end
 
+-- The words a choice goes through: read afresh each time from the engine's
+-- own rows that follow something that changes (the difficulty steps).
+local liveOptions: { [any]: () -> { string } } = setmetatable({}, { __mode = "k" }) :: any
+local function choicesOf(s: RowState): { string }
+    local live = liveOptions[s]
+    return if live then live() else s.options
+end
+
 -- Why `value` cannot be the value of the row, or nil if it can.
 local function valueProblem(s: RowState, value: any): string?
     if s.kind == "toggle" and type(value) ~= "boolean" then
         return string.format('"%s" is a toggle, so its value is true or false, not %s', s.label, type(value))
     elseif s.kind == "slider" and type(value) ~= "number" then
         return string.format('"%s" is a slider, so its value is a number, not %s', s.label, type(value))
-    elseif s.kind == "choice" and not table.find(s.options, value) then
-        return string.format('"%s" has no choice %s. Its choices are: %s', s.label, tostring(value), table.concat(s.options, ", "))
+    elseif s.kind == "choice" and not table.find(choicesOf(s), value) then
+        return string.format('"%s" has no choice %s. Its choices are: %s', s.label, tostring(value), table.concat(choicesOf(s), ", "))
     elseif s.kind == "textBox" and type(value) ~= "string" then
         return string.format('"%s" is a text box, so its value is words in quotes, not %s', s.label, type(value))
     elseif s.kind == "button" or s.kind == "info" then
@@ -308,7 +378,13 @@ local function build(fname: string, kind: string, label: any, given: any): RowSt
         before = "",
         blink = 0,
         owner = nil,
-        pieces = {},
+        el = nil,
+        labelEl = nil,
+        valueEl = nil,
+        wordEl = nil,
+        trackEl = nil,
+        fillStyle = nil,
+        knobStyle = nil,
     }
     if kind == "slider" then
         s.min, s.max = options.min or 0, options.max or 1
@@ -416,8 +492,10 @@ RowMeta.__newindex = function(self: any, key: any, value: any)
             error(string.format('A row\'s label is words in quotes, not %s: row.label = "Volume"', type(value)), 2)
         end
         s.label = value
-        if s.name then
-            s.name.text = value
+        if s.labelEl then
+            -- The page may have been read again since: then the kit puts
+            -- every row back, with this label, at the next picture.
+            pcall(put, s.labelEl, "text", value)
         end
     elseif key == "value" then
         local problem = valueProblem(s, value)
@@ -672,22 +750,19 @@ type MenuState = {
     rows: { RowState },
     chosen: number,
     dragging: RowState?,
+    -- Where the script said to put it, if it did: the stylesheet's place
+    -- otherwise. `down` is also how far down it starts, to work out how many
+    -- rows fit.
+    placed: boolean,
     right: number,
     down: number,
     width: number,
-    height: number,
-    back: any,
-    -- Only with menu.style.shadow and menu.style.accent.
-    shadow: any,
-    accentLine: any,
-    marker: any,
     -- How many rows are on the screen at once (all of them unless the menu
-    -- is too tall), the number of the first one shown, the first the
-    -- pieces are placed for, and the HUD text that says there is more.
+    -- is too tall), the number of the first one shown, and the first the
+    -- page shows now.
     fit: number,
     first: number,
     laid: number,
-    more: any,
     -- Words (or a function that gives them) for the fixed line under a
     -- scrolling menu, in place of "more above / below" while there are some.
     message: any,
@@ -702,9 +777,6 @@ type MenuState = {
 type TabsState = {
     menus: { MenuState },
     current: MenuState,
-    tabs: { any },
-    marks: { any },
-    keys: any,
     -- True when made for one menu that was not put in tabs: it is the menu
     -- itself that a script holds.
     alone: boolean,
@@ -713,6 +785,24 @@ type TabsState = {
     lastY: number?,
     -- False until the pointer has been seen once since the screen was shown.
     pointerSeen: boolean,
+    -- The page it is drawn on (made when it first opens), the file it is
+    -- drawn from, whether the game is dimmed behind it, and its parts.
+    page: any,
+    file: string,
+    dims: boolean,
+    body: any,
+    panel: any,
+    tabsEl: any,
+    rowsEl: any,
+    moreEl: any,
+    keysEl: any,
+    tabEls: { any },
+    -- The menu whose rows are on the page now.
+    dressed: MenuState?,
+    -- Whether the screen is shown, and the tick to take a shut page off the
+    -- stack of screens at.
+    shown: boolean,
+    hideAt: number?,
 }
 
 local menus: { [any]: MenuState } = setmetatable({}, { __mode = "k" }) :: any
@@ -722,6 +812,21 @@ local tabsOf: { [any]: TabsState } = setmetatable({}, { __mode = "k" }) :: any
 -- the game was in when the first opened.
 local stack: { TabsState } = {}
 local returnTo = "gameplay"
+
+-- The file each screen of the pause menu is drawn from, said by
+-- pause_menu.luau through `engine.screenFile(menuOrTabs, file, dims)`:
+-- set before the screen first opens.
+local fileOf: { [any]: { file: string, dims: boolean } } = setmetatable({}, { __mode = "k" }) :: any
+engine.screenFile = function(public: any, file: string, dims: boolean)
+    fileOf[public] = { file = file, dims = dims }
+end
+
+-- Makes a choice row the pause menu made go through `options()`, read each
+-- time the player turns it: steps a game names while the menu is open are
+-- there at once.
+engine.liveOptions = function(row: any, options: () -> { string })
+    liveOptions[states[row]] = options
+end
 
 -- True when the menu has more rows than it shows at once.
 local function scrolls(m: MenuState): boolean
@@ -733,39 +838,15 @@ local function inWindow(m: MenuState, number: number): boolean
     return number >= m.first and number < m.first + m.fit
 end
 
--- Puts the pieces of each row where the window has it (rows out of it are
--- hidden), and shows them or hides them all with `visible`. The pieces
--- are the ones made with the menu: they are moved, never made again.
-local function layout(m: MenuState, visible: boolean)
+-- Shows the rows in the window of a menu whose rows are on the page, and
+-- hides the others.
+local function layout(m: MenuState)
     m.laid = m.first
     for number, row in m.rows do
-        local inside = visible and inWindow(m, number)
-        local top = m.down + TOP + (number - m.first) * ROW
-        if row.box then
-            row.box.down = top
-        end
-        row.name.down = top + 2
-        row.shown.down = top + 2
-        if row.bar then
-            row.bar.down = top + 11
-        end
-        if row.knob then
-            row.knob.down = top + 4
-        end
-        for _, piece in row.pieces do
-            piece.visible = inside
+        if row.el then
+            put(row.el, "hidden", not inWindow(m, number))
         end
     end
-end
-
-local function setVisible(m: MenuState, visible: boolean)
-    m.back.visible = visible
-    for _, piece in { m.shadow, m.accentLine, m.marker, m.more } :: { any } do
-        if piece then
-            piece.visible = visible
-        end
-    end
-    layout(m, visible)
 end
 
 -- Scrolls so the chosen row is in the window. Rows that only tell, just
@@ -825,14 +906,15 @@ end
 local MenuMethods = {}
 local MenuMeta = {}
 
--- Makes a menu and its HUD pieces, hidden until it is opened. Its rows are
--- fixed from then on: a row added to the list afterwards is not shown.
--- `place` can say `right` and `down` (how far its top left corner is from
--- the top left of the screen: 40 and 40) and `width` (820). It is as tall as
--- its rows need. A menu with more rows than fit on the screen (the height
--- from `game.hud.size()`) shows a window of them and scrolls by itself: the
--- chosen row stays in view, the mouse wheel scrolls it, and a line says when
--- there is more above or below. The size is read when the menu is made.
+-- Makes a menu, hidden until it is opened. Its rows are fixed from then on:
+-- a row added to the list afterwards is not shown. `place` can say `right`
+-- and `down` (how far its top left corner is from the top left of the
+-- screen) and `width`; without them the stylesheet places it (40, 40 and
+-- 820 in the engine's). It is as tall as its rows need. A menu with more rows
+-- than fit on the screen (the height from `game.hud.size()`) shows a window
+-- of them and scrolls by itself: the chosen row stays in view, the mouse
+-- wheel scrolls it, and a line says when there is more above or below. The
+-- size is read when the menu is made.
 -- Example: local sound = menu.new("Sound", { menu.toggle("Music", { value = true }) })
 function menu.new(title: string, rows: { any }, place: { right: number?, down: number?, width: number? }?): any
     if type(title) ~= "string" then
@@ -866,7 +948,6 @@ function menu.new(title: string, rows: { any }, place: { right: number?, down: n
         end
         table.insert(inside, s)
     end
-    local style = menu.style
     local right = place and place.right or 40
     local down = place and place.down or 40
     local width = place and place.width or 820
@@ -876,67 +957,28 @@ function menu.new(title: string, rows: { any }, place: { right: number?, down: n
     if down + height > screenHigh - EDGE then
         -- Too tall for the screen: show as many rows as there is room for.
         fit = math.min(#rows, math.max(3, math.floor((screenHigh - EDGE - down - TOP - MORE - FOOT) / ROW)))
-        height = TOP + fit * ROW + (if fit < #rows then MORE else 0) + FOOT
     end
-    -- Made before the menu's own back, so it is drawn under it.
-    local shadow = if style.shadow
-        then game.hud.box({ right = right + 6, down = down + 8, width = width, height = height, color = style.shadow, layer = style.layer })
-        else nil
     local m: MenuState = {
         title = title,
         rows = inside,
         chosen = 1,
         dragging = nil,
+        placed = place ~= nil,
         right = right,
         down = down,
         width = width,
-        height = height,
-        back = game.hud.box({ right = right, down = down, width = width, height = height, color = style.back, layer = style.layer }),
-        shadow = shadow,
-        accentLine = nil,
-        marker = nil,
         fit = fit,
         first = 1,
         laid = 1,
-        more = nil,
         message = nil,
         tabs = nil,
         backWord = nil,
         removed = false,
         public = nil,
     }
-    if style.accent then
-        m.accentLine = game.hud.box({ right = right, down = down, width = width, height = 3, color = style.accent, layer = style.layer })
-        m.marker = game.hud.box({ right = right + 12, down = down + TOP, width = 4, height = ROW - 2, color = style.accent, layer = style.layer })
-    end
-    for number, row in inside do
+    for _, row in inside do
         row.owner = m
-        local top = down + TOP + (number - 1) * ROW
-        local left = right + 12
-        -- (Rows past the window are hidden and moved by `layout`.)
-        -- The box behind the row shows which is chosen, and catches the
-        -- pointer anywhere along the row.
-        if row.kind ~= "info" then
-            row.box = game.hud.box({ right = left, down = top, width = width - 24, height = ROW - 2, color = NOT_CHOSEN, layer = style.layer })
-        end
-        row.name = game.hud.text(row.label, { right = left + 14, down = top + 2, size = TEXT, color = style.words, layer = style.layer })
-        row.shown = game.hud.text("", { right = left + 14 + LABEL_WIDE, down = top + 2, size = TEXT, color = style.words, layer = style.layer })
-        if row.kind == "slider" then
-            local barLeft = right + width - 24 - BAR_WIDE
-            row.bar = game.hud.bar(0, { right = barLeft, down = top + 11, width = BAR_WIDE, height = 12, color = row.color or style.bar, layer = style.layer })
-            row.knob = game.hud.box({ right = barLeft, down = top + 4, width = 8, height = 26, color = style.knob, layer = style.layer })
-        end
-        row.pieces = {}
-        for _, piece in { row.box or false, row.name, row.shown, row.bar or false, row.knob or false } :: { any } do
-            if piece then
-                table.insert(row.pieces, piece)
-            end
-        end
     end
-    if fit < #inside then
-        m.more = game.hud.text("", { right = right + 26, down = down + TOP + fit * ROW + 2, size = 22, color = style.quiet, layer = style.layer })
-    end
-    setVisible(m, false)
     -- Start on the first row that can be chosen.
     move(m, 0)
     local public = setmetatable({}, MenuMeta)
@@ -947,61 +989,219 @@ end
 
 -- ------------------------------------------------------------------ tabs
 
--- Shows the pieces of `ts` and its front menu, or hides all of them.
-local function showScreen(ts: TabsState, on: boolean)
-    for number, each in ts.menus do
-        setVisible(each, on and each == ts.current)
-        ts.tabs[number].visible = on
-        ts.marks[number].visible = on
+-- The HTML of one row. See menu.html for what each part is.
+local function rowHtml(row: RowState): string
+    local label = '<div class="mark"></div><span class="label">' .. game.ui.escape(row.label) .. "</span>"
+    local kind = row.kind
+    if kind == "toggle" then
+        return '<div class="row toggle">' .. label .. '<span class="value"></span><div class="switch"><div class="knob"></div></div></div>'
+    elseif kind == "slider" then
+        return '<div class="row slider">'
+            .. label
+            .. '<span class="value"></span><div class="track"><div class="fill"></div><div class="knob"></div></div></div>'
+    elseif kind == "choice" then
+        return '<div class="row choice">'
+            .. label
+            .. '<div class="value"><div class="arrow back"></div><span class="word"></span><div class="arrow next"></div></div></div>'
+    elseif kind == "textBox" then
+        return '<div class="row text-box">' .. label .. '<div class="value"><span class="word"></span><div class="caret"></div></div></div>'
     end
-    ts.keys.visible = on
-    if on then
-        local front = ts.current
-        ts.keys.down = front.down + front.height - FOOT + 12
+    return '<div class="row ' .. kind .. '">' .. label .. '<span class="value"></span></div>'
+end
+
+-- Forgets the elements of a menu's rows: they are not on a page now.
+local function undress(m: MenuState)
+    for _, row in m.rows do
+        row.el, row.labelEl, row.valueEl, row.wordEl, row.trackEl = nil, nil, nil, nil, nil
+        row.fillStyle, row.knobStyle = nil, nil
     end
 end
 
--- Makes the pieces that show `list` as tabs, hidden. They are made after the
--- menus' own, so the tabs are drawn over them.
-local function makeTabs(list: { MenuState }, alone: boolean): TabsState
-    local style = menu.style
-    local first = list[1]
-    local tabs, marks = {}, {}
-    local across = first.right + 12
-    for number, each in list do
-        -- A tab is as wide as its title, near enough.
-        local wide = #each.title * 15 + 36
-        marks[number] = game.hud.box({ right = across, down = first.down + 12, width = wide, height = 42, color = NOT_CHOSEN, layer = style.layer })
-        tabs[number] = game.hud.text(each.title, { right = across + 18, down = first.down + 16, size = 30, color = style.quiet, layer = style.layer })
-        across += wide + 8
+-- Puts the rows of the menu in front on the page of `ts`.
+local function dressRows(ts: TabsState)
+    local m = ts.current
+    local old = ts.dressed
+    if old then
+        undress(old)
     end
-    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.height - FOOT + 12, size = 24, color = style.quiet, layer = style.layer })
+    ts.dressed = m
+    local panel = ts.panel
+    if panel then
+        local style = panel.style
+        style.left = if m.placed then m.right .. "px" else nil
+        style.top = if m.placed then m.down .. "px" else nil
+        style.width = if m.placed then m.width .. "px" else nil
+    end
+    local more = ts.moreEl
+    if more then
+        put(more, "hidden", not scrolls(m))
+    end
+    local list = ts.rowsEl
+    if not list then
+        return
+    end
+    list:fill(m.rows, rowHtml)
+    local made = list:findAll(".row")
+    for number, row in m.rows do
+        local el = made[number]
+        if el then
+            row.el = el
+            row.labelEl = el:find(".label")
+            row.valueEl = el:find(".value")
+            row.wordEl = el:find(".word")
+            local track = el:find(".track")
+            row.trackEl = track
+            if track then
+                local fill = track:find(".fill")
+                local knob = track:find(".knob")
+                row.fillStyle = if fill then fill.style else nil
+                row.knobStyle = if knob then knob.style else nil
+                if fill and row.color then
+                    fill.style.backgroundColor = row.color
+                end
+            end
+        end
+    end
+    layout(m)
+end
+
+-- Sets on `body` each colour of `menu.style` the game changed, as the
+-- variable of the stylesheet it is. Done each time a page opens, so a colour
+-- set while the game runs is on the next menu that opens.
+local function applyStyle(body: any)
+    if not body then
+        return
+    end
+    for key, var in STYLE_VARS do
+        local value = menu.style[key]
+        if value ~= nil and value ~= STYLE_START[key] then
+            local last = said[body]
+            if not last then
+                last = {}
+                said[body] = last
+            end
+            local text = tostring(value)
+            if last[var] ~= text then
+                last[var] = text
+                body:setVar(var, text)
+            end
+        end
+    end
+end
+
+-- Fills the page of `ts` in, from nothing: when it is made, and again when
+-- its files were saved and it was read again.
+local function dress(ts: TabsState)
+    local page = ts.page
+    ts.body = page:find("body")
+    ts.panel = page:find("#menu")
+    ts.tabsEl = page:find("#tabs")
+    ts.rowsEl = page:find("#rows")
+    ts.moreEl = page:find("#more")
+    ts.keysEl = page:find("#keys")
+    local body = ts.body
+    if body then
+        body:addClass((string.gsub(ts.file, "%.html$", "")))
+        mark(body, "shut", not ts.shown)
+    end
+    local shade = page:find("#shade")
+    if shade and ts.dims then
+        shade:addClass("on")
+    end
+    ts.tabEls = {}
+    local tabs = ts.tabsEl
+    if tabs then
+        tabs:fill(ts.menus, function(each: MenuState): string
+            return '<div class="tab">' .. game.ui.escape(each.title) .. "</div>"
+        end)
+        ts.tabEls = tabs:findAll(".tab")
+        if #ts.menus == 1 then
+            tabs:addClass("single")
+        end
+    end
+    ts.dressed = nil
+    dressRows(ts)
+end
+
+-- Shows the page of `ts` with its front menu on it, making the page the
+-- first time; or shuts it. A shut page is drawn as nothing at once and taken
+-- off the stack of screens at the next tick, so its look has been shut once
+-- and opening it again runs its opening transition.
+local closing: { TabsState } = {}
+local function showScreen(ts: TabsState, on: boolean)
+    ts.shown = on
+    if on then
+        if not ts.page then
+            local said = fileOf[ts.public]
+            if said then
+                ts.file, ts.dims = said.file, said.dims
+            end
+            ts.page = engine.screen(ts.file)
+            dress(ts)
+        elseif engine.reloaded(ts.page) then
+            dress(ts)
+        elseif ts.dressed ~= ts.current then
+            dressRows(ts)
+        end
+        ts.hideAt = nil
+        ts.page:show()
+        if ts.body then
+            applyStyle(ts.body)
+            mark(ts.body, "shut", false)
+        end
+    elseif ts.page and ts.page.visible then
+        if ts.body then
+            mark(ts.body, "shut", true)
+        end
+        if not ts.hideAt then
+            ts.hideAt = ticks + 1
+            table.insert(closing, ts)
+        end
+    end
+end
+
+-- Makes the state that shows `list` as tabs, hidden. Its page is made the
+-- first time it opens.
+local function makeTabs(list: { MenuState }, alone: boolean): TabsState
     local ts: TabsState = {
         menus = list,
-        current = first,
-        tabs = tabs,
-        marks = marks,
-        keys = keys,
+        current = list[1],
         alone = alone,
         public = nil,
         lastX = nil,
         lastY = nil,
         pointerSeen = false,
+        page = nil,
+        file = "game-menu.html",
+        dims = false,
+        body = nil,
+        panel = nil,
+        tabsEl = nil,
+        rowsEl = nil,
+        moreEl = nil,
+        keysEl = nil,
+        tabEls = {},
+        dressed = nil,
+        shown = false,
+        hideAt = nil,
     }
     for _, each in list do
         each.tabs = ts
     end
-    showScreen(ts, false)
     return ts
 end
 
--- Takes the tab pieces of `ts` away.
+-- Takes the page of `ts` away.
 local function removeTabPieces(ts: TabsState)
-    for number in ts.menus do
-        ts.tabs[number]:remove()
-        ts.marks[number]:remove()
+    for _, each in ts.menus do
+        undress(each)
     end
-    ts.keys:remove()
+    if ts.page then
+        ts.page:remove()
+        ts.page = nil
+    end
+    ts.dressed = nil
+    ts.shown = false
 end
 
 -- The screen that shows `m` when it is opened: its tabs, or one made for
@@ -1121,7 +1321,7 @@ function MenuMethods.toggle(self: any)
     end
 end
 
--- Takes the menu away for good: closes it and frees its HUD pieces. A menu
+-- Takes the menu away for good: closes it and frees its page. A menu
 -- in tabs goes with `tabs:remove()` instead.
 -- Example: sound:remove()
 function MenuMethods.remove(self: any)
@@ -1139,18 +1339,8 @@ function MenuMethods.remove(self: any)
         m.tabs = nil
     end
     m.removed = true
-    m.back:remove()
-    for _, piece in { m.shadow, m.accentLine, m.marker } :: { any } do
-        if piece then
-            piece:remove()
-        end
-    end
+    undress(m)
     for _, row in m.rows do
-        for _, piece in row.pieces do
-            piece:remove()
-        end
-        row.pieces = {}
-        row.name, row.shown, row.box, row.bar, row.knob = nil, nil, nil, nil, nil
         row.owner = nil
     end
 end
@@ -1181,8 +1371,11 @@ MenuMeta.__newindex = function(self: any, key: any, value: any)
         local ts = m.tabs
         if ts then
             local number = table.find(ts.menus, m)
-            if number then
-                ts.tabs[number].text = value
+            local tab = if number then ts.tabEls[number] else nil
+            if tab then
+                -- The page may have been read again since: then the kit
+                -- puts every tab back, with this title, when it opens.
+                pcall(put, tab, "text", value)
             end
         end
     elseif key == "chosen" then
@@ -1331,14 +1524,24 @@ end
 
 -- -------------------------------------------------------------- hearing
 
+-- True while the pointer is on the element.
+local function over(element: any): boolean
+    if not element then
+        return false
+    end
+    local on = engine.pointer(element)
+    return on
+end
+
 -- True while the pointer is anywhere on the row.
 local function hovered(row: RowState): boolean
-    for _, piece in row.pieces do
-        if piece.hovered then
-            return true
-        end
-    end
-    return false
+    return over(row.el)
+end
+
+-- How far across the element the pointer is: 0 at its left, 1 at its right.
+local function across(element: any): number
+    local _, along = engine.pointer(element)
+    return along
 end
 
 -- Takes `value` into a row the player changed and tells the handlers. A row
@@ -1379,11 +1582,12 @@ local function change(row: RowState, way: number)
         local steps = math.floor((current(row) - row.min) / row.step + 0.5) + way
         setSlider(row, row.min + steps * row.step, true)
     elseif row.kind == "choice" then
-        local count = #row.options
-        local now = table.find(row.options, current(row)) or 1
+        local options = choicesOf(row)
+        local count = #options
+        local now = table.find(options, current(row)) or 1
         local to = if row.wraps then (now - 1 + way) % count + 1 else math.clamp(now + way, 1, count)
         if to ~= now then
-            commit(row, row.options[to])
+            commit(row, options[to])
         end
     elseif row.kind == "toggle" then
         commit(row, not current(row))
@@ -1393,23 +1597,15 @@ end
 -- ------------------------------------------------------ on-screen keyboard
 
 -- A gamepad has no keys to type with, so pressing a text box with one opens
--- this keyboard: HUD pieces one layer above the menus, made the first time it
--- is needed and shown again after that. A game writes nothing for it.
-local KEY_W = 72 -- a letter's key
-local KEY_GAP = 6
-local KEY_H = 52
-local KEY_ROW = 58 -- from one row of keys to the next
-local KEYS_LEFT = 30 -- the room at the left of the panel
-local KEYBOARD_W = 840
-local KEYBOARD_H = 430
-local LETTERS = { "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm-'." }
-local KEY_COLOR = "#ffffff1a"
-
-type Key = { kind: string, char: string, left: number, width: number, box: any, face: any }
+-- this keyboard: the page `menu-keyboard.html`, made the first time it is
+-- needed and shown again after that. Its keys are read from the page, so a
+-- game's own page may lay them out as it likes. A game writes nothing for it.
+type Key = { kind: string, char: string, el: any }
 type Keyboard = {
+    page: any,
+    body: any,
     rows: { { Key } },
-    pieces: { any },
-    text: any,
+    typed: any,
     hints: any,
     -- The key chosen, and whether capitals are on.
     row: number,
@@ -1417,6 +1613,7 @@ type Keyboard = {
     caps: boolean,
     lastX: number?,
     lastY: number?,
+    hideAt: number?,
 }
 local osk: Keyboard? = nil
 
@@ -1428,78 +1625,74 @@ local function faceOf(k: Key, caps: boolean): string
     return k.char
 end
 
--- Puts a key's words in the middle of the key.
-local function centreFace(k: Key)
-    k.face.right = k.left + (k.width - k.face.width) / 2
+-- Reads the keys from the keyboard's page.
+local function readKeys(board: Keyboard)
+    local page = board.page
+    board.body = page:find("body")
+    if board.body then
+        board.body:addClass("menu-keyboard")
+    end
+    board.typed = page:find("#typed")
+    board.hints = page:find("#hints")
+    board.rows = {}
+    for _, line in page:findAll(".keyrow") do
+        local keys: { Key } = {}
+        for _, el in line:findAll(".key") do
+            local kind = el:attribute("data-key") or "letter"
+            table.insert(keys, { kind = kind, char = el.text, el = el })
+        end
+        if #keys > 0 then
+            table.insert(board.rows, keys)
+        end
+    end
 end
 
--- Makes the keyboard's pieces, hidden. A key's `left` is from the left of the
--- screen, like the pieces' own.
+-- The keyboard, made the first time.
 local function buildKeyboard(): Keyboard
     local made = osk
     if made then
+        if engine.reloaded(made.page) then
+            readKeys(made)
+            -- The keys are read again with small letters.
+            made.row, made.column, made.caps = math.min(made.row, #made.rows), 1, false
+        end
         return made
     end
-    local style = menu.style
-    local layer = style.layer + 1
-    -- In the middle along the bottom of the room the HUD has, which is the
-    -- screen less its safe margin: `right` and `down` are measured in it.
-    local wide, high = game.hud.size()
-    local left = math.max(0, (wide - KEYBOARD_W) // 2)
-    local top = math.max(0, high - KEYBOARD_H)
-    local pieces: { any } = {}
-    local function add(piece: any): any
-        table.insert(pieces, piece)
-        return piece
-    end
-    add(game.hud.box({ right = left, down = top, width = KEYBOARD_W, height = KEYBOARD_H, color = style.back, layer = layer }))
-    local text = add(game.hud.text("", { right = left + KEYS_LEFT, down = top + 14, size = 30, color = style.words, layer = layer }))
-    local hints = add(game.hud.text("", { right = left + KEYS_LEFT, down = top + KEYBOARD_H - 36, size = 22, color = style.quiet, layer = layer }))
-    local rows: { { Key } } = {}
-    local function makeKey(row: number, kind: string, char: string, across: number, width: number)
-        local down = top + 64 + (row - 1) * KEY_ROW
-        local box = add(game.hud.box({ right = left + across, down = down, width = width, height = KEY_H, color = KEY_COLOR, layer = layer }))
-        local face = add(game.hud.text(char, { right = left + across, down = down + 10, size = TEXT, color = style.words, layer = layer }))
-        local k: Key = { kind = kind, char = char, left = left + across, width = width, box = box, face = face }
-        centreFace(k)
-        table.insert(rows[row], k)
-    end
-    for number, line in LETTERS do
-        rows[number] = {}
-        -- The home row starts half a key in, as on a keyboard.
-        local across = KEYS_LEFT + if number == 3 then (KEY_W + KEY_GAP) // 2 else 0
-        for char in string.gmatch(line, ".") do
-            makeKey(number, "letter", char, across, KEY_W)
-            across += KEY_W + KEY_GAP
-        end
-    end
-    rows[5] = {}
-    local across = KEYS_LEFT
-    for _, wide in { { "shift", "Shift", 160 }, { "space", "Space", 300 }, { "back", "Back", 150 }, { "done", "Done", 150 } } :: { { any } } do
-        makeKey(5, wide[1], wide[2], across, wide[3])
-        across += wide[3] + KEY_GAP
-    end
-    for _, piece in pieces do
-        piece.visible = false
-    end
-    local keyboard: Keyboard = { rows = rows, pieces = pieces, text = text, hints = hints, row = 3, column = 1, caps = false }
-    osk = keyboard
-    return keyboard
+    local board: Keyboard = {
+        page = engine.screen("menu-keyboard.html"),
+        body = nil,
+        rows = {},
+        typed = nil,
+        hints = nil,
+        row = 1,
+        column = 1,
+        caps = false,
+        hideAt = nil,
+    }
+    readKeys(board)
+    osk = board
+    return board
 end
 
--- Shows the keyboard with small letters and "a" chosen.
+-- Shows the keyboard with small letters and "a" chosen (or the first key, on
+-- a keyboard with no "a").
 local function showKeyboard()
     local board = buildKeyboard()
-    board.row, board.column, board.caps = 3, 1, false
+    board.row, board.column, board.caps = 1, 1, false
     board.lastX, board.lastY = nil, nil
-    for _, line in board.rows do
-        for _, k in line do
-            k.face.text = faceOf(k, false)
-            centreFace(k)
+    for r, line in board.rows do
+        for c, k in line do
+            put(k.el, "text", faceOf(k, false))
+            if k.char == "a" and k.kind == "letter" then
+                board.row, board.column = r, c
+            end
         end
     end
-    for _, piece in board.pieces do
-        piece.visible = true
+    board.hideAt = nil
+    board.page:show()
+    if board.body then
+        applyStyle(board.body)
+        mark(board.body, "shut", false)
     end
     keyboardOn = true
 end
@@ -1507,10 +1700,13 @@ end
 local function hideKeyboard()
     keyboardOn = false
     local board = osk
-    if board then
-        for _, piece in board.pieces do
-            piece.visible = false
+    if board and board.page.visible then
+        if board.body then
+            -- The page may have been read again since; then it is hidden
+            -- at the next tick all the same.
+            pcall(mark, board.body, "shut", true)
         end
+        board.hideAt = ticks + 1
     end
 end
 
@@ -1573,11 +1769,9 @@ local function words(row: RowState): string
     end
     local now = current(row)
     if row.kind == "textBox" then
-        if row.typing then
-            -- The caret blinks: on for half a second, off for half.
-            return now .. (if (ticks - row.blink) // 30 % 2 == 0 then "|" else "")
-        end
-        return if now == "" then row.placeholder else now
+        -- While it is typed into, the page draws a caret after the words.
+        -- Spaces are kept as typed (a page runs spaces together).
+        return if now == "" and not row.typing then row.placeholder else (string.gsub(now, " ", "\u{a0}"))
     end
     if row.kind == "toggle" then
         return if now then "on" else "off"
@@ -1586,9 +1780,6 @@ local function words(row: RowState): string
     local said = if format then format(now)
         elseif type(now) == "number" then string.format("%g", math.floor(now * 1000 + 0.5) / 1000)
         else tostring(now)
-    if row.kind == "choice" then
-        return "<  " .. said .. "  >"
-    end
     return said
 end
 
@@ -1744,8 +1935,7 @@ local function pressKey(s: RowState, board: Keyboard, k: Key)
         board.caps = not board.caps
         for _, line in board.rows do
             for _, other in line do
-                other.face.text = faceOf(other, board.caps)
-                centreFace(other)
+                put(other.el, "text", faceOf(other, board.caps))
             end
         end
     elseif k.kind == "done" then
@@ -1773,21 +1963,31 @@ local function hearKeyboard(ts: TabsState, s: RowState)
         return
     end
     local rows = board.rows
+    if #rows == 0 then
+        return
+    end
     local x, y = game.input.stepped("menu_move")
     local was = board.row * 100 + board.column
     if x ~= 0 then
         board.column = (board.column - 1 + x) % #rows[board.row] + 1
     end
     if y ~= 0 and board.row - y >= 1 and board.row - y <= #rows then
-        -- Up and down stop at the edges and land on the key nearest across.
-        local here = rows[board.row][board.column]
-        local across = here.left + here.width / 2
+        -- Up and down stop at the edges and land on the key nearest across,
+        -- where the page drew them (or the same number along, before it has).
+        local function middle(k: Key): number?
+            local left, _, width = engine.rect(k.el)
+            return if left then left + width / 2 else nil
+        end
+        local from = middle(rows[board.row][board.column])
         board.row -= y
-        local best, gap = 1, math.huge
-        for number, k in rows[board.row] do
-            local apart = math.abs(k.left + k.width / 2 - across)
-            if apart < gap then
-                best, gap = number, apart
+        local best, gap = math.min(board.column, #rows[board.row]), math.huge
+        if from then
+            for number, k in rows[board.row] do
+                local at = middle(k)
+                local apart = if at then math.abs(at - from) else math.huge
+                if apart < gap then
+                    best, gap = number, apart
+                end
             end
         end
         board.column = best
@@ -1797,7 +1997,7 @@ local function hearKeyboard(ts: TabsState, s: RowState)
     if px ~= nil and board.lastX ~= nil and (px ~= board.lastX or py ~= board.lastY) then
         for r, line in rows do
             for c, k in line do
-                if k.box.hovered then
+                if over(k.el) then
                     board.row, board.column = r, c
                 end
             end
@@ -1816,14 +2016,14 @@ local function hearKeyboard(ts: TabsState, s: RowState)
     elseif game.input.justPressed("menu_previous_tab") or game.input.justPressed("menu_next_tab") then
         sound(menu.sounds.move)
         -- The bumpers are the Shift key without walking to it.
-        pressKey(s, board, rows[5][1])
+        pressKey(s, board, { kind = "shift", char = "", el = nil })
     elseif game.input.justPressed("menu_confirm") then
         sound(menu.sounds.choose)
         pressKey(s, board, rows[board.row][board.column])
     elseif game.input.justPressed("menu_click") then
         for r, line in rows do
             for c, k in line do
-                if live() and k.box.hovered then
+                if live() and over(k.el) then
                     board.row, board.column = r, c
                     sound(menu.sounds.choose)
                     pressKey(s, board, k)
@@ -1835,47 +2035,52 @@ end
 
 -- Shows the on-screen keyboard: the words so far with the caret, the chosen
 -- key, and the buttons that work it as the player has them bound.
+-- What the keyboard's line of buttons was last worked out for.
+local hintsPad: boolean? = nil
+local hintsEl: any = nil
+
 local function drawKeyboard(s: RowState)
     local board = buildKeyboard()
-    local style = menu.style
-    local shown = words(s)
+    local shown: string = current(s)
     local count = utf8.len(shown) or #shown
     if count > 40 then
         shown = "…" .. string.sub(shown, utf8.offset(shown, count - 38) or 1)
     end
-    board.text.text = shown
+    if board.typed then
+        put(board.typed, "text", (string.gsub(shown, " ", "\u{a0}")))
+    end
     for r, line in board.rows do
         for c, k in line do
-            local chosen = r == board.row and c == board.column
-            k.box.color = if chosen then style.chosen else KEY_COLOR
-            k.face.color = if chosen then style.chosenWords
-                elseif k.kind == "shift" and board.caps then style.on
-                else style.words
+            mark(k.el, "chosen", r == board.row and c == board.column)
+            if k.kind == "shift" then
+                mark(k.el, "on", board.caps)
+            end
         end
     end
-    local label = game.input.label
-    board.hints.text = string.format(
-        "%s type   %s%s   %s %s caps   %s done   %s cancel",
-        label("menu_confirm"),
-        if hasAction("menu_erase") then label("menu_erase") .. " erase   " else "",
-        if hasAction("menu_space") then label("menu_space") .. " space" else "",
-        label("menu_previous_tab"),
-        label("menu_next_tab"),
-        label("menu_close"),
-        label("menu_back")
-    )
+    local gamepad = game.input.usingGamepad()
+    if board.hints and (hintsPad ~= gamepad or hintsEl ~= board.hints) then
+        hintsPad, hintsEl = gamepad, board.hints
+        local label = game.input.label
+        put(
+            board.hints,
+            "text",
+            string.format(
+                "%s type  ·  %s%s  ·  %s %s caps  ·  %s done  ·  %s cancel",
+                label("menu_confirm"),
+                if hasAction("menu_erase") then label("menu_erase") .. " erase  ·  " else "",
+                if hasAction("menu_space") then label("menu_space") .. " space" else "",
+                label("menu_previous_tab"),
+                label("menu_next_tab"),
+                label("menu_close"),
+                label("menu_back")
+            )
+        )
+    end
 end
 
 -- Hears the player for a menu in front, with whether the pointer moved
 -- since the last tick.
 local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
-    -- A choice's words are set here too, not only while drawing, so that
-    -- a click can tell its "<" from its ">".
-    for _, row in m.rows do
-        if row.kind == "choice" and row.shown then
-            row.shown.text = words(row)
-        end
-    end
     local x, y = game.input.stepped("menu_move")
     local scroll = scrolls(m)
     local wheel = game.input.wheel()
@@ -1942,15 +2147,15 @@ local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
             end
             if clicked.kind ~= "info" and inWindow(m, number) and hovered(clicked) then
                 m.chosen = number
-                local bar, shown = clicked.bar, clicked.shown
-                local along = if bar then bar:pointerAt() else -1
+                local bar, shown = clicked.trackEl, clicked.valueEl
+                local along = if bar then across(bar) else -1
                 if bar and along >= -0.03 and along <= 1.03 then
                     -- Anywhere over the bar or its knob starts a drag.
                     m.dragging = clicked
-                elseif clicked.kind == "choice" and shown and shown.hovered then
-                    -- The left half of "< word >" goes back, the right on.
-                    local across = shown:pointerAt()
-                    change(clicked, if across < 0.5 then -1 else 1)
+                elseif clicked.kind == "choice" and shown and over(shown) then
+                    -- Left of the middle of the word goes back, right of it on.
+                    local word = clicked.wordEl or shown
+                    change(clicked, if across(word) < 0.5 then -1 else 1)
                     sound(menu.sounds.choose)
                 else
                     sound(menu.sounds.choose)
@@ -1962,9 +2167,9 @@ local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
     -- A press on a slider's bar sets it from where the pointer is along the
     -- bar, for as long as the button is held.
     local dragging = m.dragging
-    if dragging and dragging.bar and game.input.pressed("menu_click") then
-        local across = math.clamp(dragging.bar:pointerAt(), 0, 1)
-        local value = dragging.min + across * (dragging.max - dragging.min)
+    if dragging and dragging.trackEl and game.input.pressed("menu_click") then
+        local along = math.clamp(across(dragging.trackEl), 0, 1)
+        local value = dragging.min + along * (dragging.max - dragging.min)
         setSlider(dragging, dragging.min + math.floor((value - dragging.min) / dragging.step + 0.5) * dragging.step, false)
     else
         m.dragging = nil
@@ -2005,7 +2210,7 @@ local function hear(ts: TabsState)
         end
         if game.input.justPressed("menu_click") then
             for number in ts.menus do
-                if ts.tabs[number].hovered or ts.marks[number].hovered then
+                if over(ts.tabEls[number]) then
                     turn = number - at
                 end
             end
@@ -2025,89 +2230,137 @@ local function hear(ts: TabsState)
     hearMenu(ts, ts.current, moved)
 end
 
--- Shows what each row of a menu is now.
-local function drawMenu(m: MenuState)
-    local style = menu.style
-    local more = m.more
-    if more then
+-- Shows what each row of the menu in front is now. Only what changed is
+-- written to the page.
+local function drawMenu(ts: TabsState, m: MenuState)
+    if ts.dressed ~= m then
+        return
+    end
+    local more = ts.moreEl
+    if more and scrolls(m) then
         local above, below = m.first > 1, m.first + m.fit <= #m.rows
         local say = m.message
         if type(say) == "function" then
             say = say()
         end
-        more.text = if type(say) == "string" and say ~= "" then say
-            elseif above and below then "… more above     … more below"
-            elseif above then "… more above"
-            elseif below then "… more below"
-            else ""
+        put(
+            more,
+            "text",
+            if type(say) == "string" and say ~= "" then say
+                elseif above and below then "… more above and below"
+                elseif above then "… more above"
+                elseif below then "… more below"
+                else ""
+        )
+    end
+    if m.laid ~= m.first then
+        layout(m)
     end
     for number, row in m.rows do
-        local chosen = number == m.chosen
-        local box, name, shown = row.box, row.name, row.shown
-        if box then
-            box.color = if chosen then style.chosen else NOT_CHOSEN
-        end
-        local marker = m.marker
-        if chosen and marker then
-            marker.down = m.down + TOP + (number - m.first) * ROW
-        end
-        if name and shown then
-            name.color = if chosen then style.chosenWords elseif row.kind == "info" then style.quiet else style.words
-            shown.text = words(row)
-            shown.color = if row.kind == "textBox" and not row.typing and current(row) == "" then style.quiet
-                elseif row.kind == "toggle" and not current(row) then style.off
-                elseif row.kind == "toggle" then style.on
-                else style.words
-        end
-        local bar, knob = row.bar, row.knob
-        if bar and knob then
-            local share = math.clamp((current(row) - row.min) / math.max(row.max - row.min, 1e-6), 0, 1)
-            bar.value = share
-            knob.right = m.right + m.width - 24 - BAR_WIDE + share * BAR_WIDE - 4
+        local el = row.el
+        if el then
+            mark(el, "chosen", number == m.chosen)
+            local kind = row.kind
+            if kind == "toggle" then
+                mark(el, "on", current(row) == true)
+            elseif kind == "textBox" then
+                mark(el, "empty", current(row) == "" and not row.typing)
+                mark(el, "typing", row.typing)
+            elseif kind == "slider" and row.fillStyle and row.knobStyle then
+                local share = math.clamp((current(row) - row.min) / math.max(row.max - row.min, 1e-6), 0, 1)
+                local along = string.format("%.2f%%", share * 100)
+                put(row.fillStyle, "width", along)
+                put(row.knobStyle, "left", along)
+            end
+            local target = row.wordEl or row.valueEl
+            if target then
+                put(target, "text", words(row))
+            end
         end
     end
 end
 
+-- What the line of keys was last worked out for.
+local keysFor: MenuState? = nil
+local keysPad = false
+local keysState = -1
+local keysDepth = 0
+local keysEl: any = nil
+
 -- Shows the screen on top, and the keys that work it as the player has them
 -- bound.
 local function draw(ts: TabsState)
-    local style = menu.style
+    if ts.page and engine.reloaded(ts.page) then
+        dress(ts)
+    end
     for number, each in ts.menus do
-        local front = each == ts.current
-        ts.tabs[number].color = if front then style.words else style.quiet
-        ts.marks[number].color = if front and #ts.menus > 1 then style.chosen else NOT_CHOSEN
-    end
-    drawMenu(ts.current)
-    local label = game.input.label
-    local tabs = if #ts.menus > 1
-        then string.format("   %s %s tabs", label("menu_previous_tab"), label("menu_next_tab"))
-        else ""
-    local typing = typingRow
-    if typing and typing.owner.tabs == ts then
-        if keyboardOn then
-            ts.keys.text = ""
-            drawKeyboard(typing)
-        elseif ownKeyboardOn then
-            ts.keys.text = ""
-        else
-            ts.keys.text = "type   Enter done   Escape put the old words back"
+        local tab = ts.tabEls[number]
+        if tab then
+            mark(tab, "current", each == ts.current)
         end
-        return
     end
-    ts.keys.text = string.format(
-        "%s choose and change   %s press%s   %s %s",
-        label("menu_move"),
-        label("menu_confirm"),
-        tabs,
-        label("menu_back"),
-        ts.current.backWord or (if #stack > 1 then "back" else "close")
-    )
+    drawMenu(ts, ts.current)
+    local typing = typingRow
+    local typingHere = typing ~= nil and typing.owner.tabs == ts
+    if typingHere and keyboardOn and typing then
+        drawKeyboard(typing)
+    end
+    -- The line of keys is worked out again only when what it says may have
+    -- changed: another screen, tab or device, or typing begun or ended.
+    local keys = ts.keysEl
+    local gamepad = game.input.usingGamepad()
+    local state = if typingHere then (if keyboardOn then 1 elseif ownKeyboardOn then 2 else 3) else 0
+    if keys and (keysFor ~= ts.current or keysPad ~= gamepad or keysState ~= state or keysDepth ~= #stack or keysEl ~= keys) then
+        keysFor, keysPad, keysState, keysDepth, keysEl = ts.current, gamepad, state, #stack, keys
+        local label = game.input.label
+        local line: string
+        if state == 1 or state == 2 then
+            line = ""
+        elseif state == 3 then
+            line = "type  ·  Enter done  ·  Escape put the old words back"
+        else
+            local tabs = if #ts.menus > 1
+                then string.format("  ·  %s %s tabs", label("menu_previous_tab"), label("menu_next_tab"))
+                else ""
+            line = string.format(
+                "%s choose and change  ·  %s press%s  ·  %s %s",
+                label("menu_move"),
+                label("menu_confirm"),
+                tabs,
+                label("menu_back"),
+                ts.current.backWord or (if #stack > 1 then "back" else "close")
+            )
+        end
+        put(keys, "text", line)
+    end
+end
+
+-- Takes pages that were shut at least a tick ago off the stack of screens.
+local function hideShut()
+    for number = #closing, 1, -1 do
+        local ts = closing[number]
+        if not ts.hideAt or ts.hideAt <= ticks then
+            table.remove(closing, number)
+            if ts.hideAt and not ts.shown and ts.page then
+                ts.page:hide()
+            end
+            ts.hideAt = nil
+        end
+    end
+    local board = osk
+    if board and board.hideAt and board.hideAt <= ticks then
+        board.hideAt = nil
+        if not keyboardOn then
+            board.page:hide()
+        end
+    end
 end
 
 -- The kit hears the player and draws by itself, for as long as a screen is
 -- open: a script has nothing to call.
 game.onTick(function()
     ticks += 1
+    hideShut()
     -- The engine took the keyboard back (the window lost focus, the level
     -- changed, a script failed, or a script of the game stopped typing): the
     -- box is not being typed into any more.
@@ -2117,13 +2370,18 @@ game.onTick(function()
     end
     local ts = stack[#stack]
     if ts then
+        -- Its files were saved and read again: what the kit put on the page
+        -- is gone, so put it back before the pointer looks for rows.
+        if ts.page and engine.reloaded(ts.page) then
+            dress(ts)
+        end
         hear(ts)
         -- Placed in the rules, not while drawing: the pointer finds rows
         -- where the rules left them. (A screen closed or opened by now is
         -- laid out as it is shown.)
         local front = stack[#stack]
-        if front and front.current.laid ~= front.current.first then
-            layout(front.current, true)
+        if front and front.dressed == front.current and front.current.laid ~= front.current.first then
+            layout(front.current)
         end
     end
 end)

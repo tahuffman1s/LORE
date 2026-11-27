@@ -388,7 +388,8 @@ game.ui.sounds.volume = 0.4      -- 0 to 1
 They start as `"menu-move"` and `"menu-choose"`, at 0.6, the same as `game.menu`.
 
 `game.ui.reduceMotion = true` makes things that fade or slide jump to where they
-end. Give it to players who ask for it.
+end. The player's own setting, Reduce motion on the pause menu's Gameplay tab, does
+the same whatever the script says.
 
 ## The starter stylesheet
 
@@ -463,6 +464,125 @@ its own small sheet, so you can read one screen from top to bottom.
 `examples/terminal` in the LORE repository is a whole small game built on it: a HUD
 with a compass, objectives, health and a weapon, a pause screen, a pack in three tabs
 and a settings screen, in six colours.
+
+## The engine's menus: restyle, replace, themes
+
+The pause menu, the settings with their tabs (Gameplay, Sound, Controls,
+Graphics), the Controls page where a player rebinds, the question before quitting,
+the on-screen keyboard, and every menu a script makes with `game.menu` are pages of
+HTML and CSS that ship with the engine. They are drawn the way your own screens are,
+and you change them the same way. The script side does not change: `game.menu` and
+`game.pauseMenu` work as they always have.
+
+Three ways to change how they look, from the least to the most:
+
+**A ready-made look.** One line at the top of `main.luau`:
+
+```lua
+game.ui.theme("parchment")   -- warm paper and brown ink, a red ribbon
+game.ui.theme("frost")       -- pale glass, round pills, a blue ring
+game.ui.theme("ember")       -- charcoal and fire, square corners, gold
+game.ui.theme(nil)           -- the engine's own look again
+```
+
+Capitals do not matter; a name that is not a theme says the ones there are. Last wins:
+the engine's sheet, then the theme, then your `ui/menus.css`, then the colours a script
+sets in `game.menu.style`.
+
+The settings' Gameplay tab in each, at 1080p: the engine's own, then parchment,
+frost and ember.
+
+![The engine's own look](img/menus-default.jpg)
+![Parchment](img/menus-parchment.jpg)
+![Frost](img/menus-frost.jpg)
+![Ember](img/menus-ember.jpg)
+
+**Your own sheet.** `ui/menus.css` in your game's folder is read after the engine's
+sheet and after the theme, so a rule of yours wins. Every colour, size, corner and
+time the menus use is a variable on `body`; change one and every menu follows:
+
+```css ui/menus.css
+body {
+  --menu-back: rgba(20, 24, 40, 0.94);   /* the panel */
+  --menu-ring: #7fe0d0;                  /* the ring round the chosen row */
+  --menu-font: Georgia;
+  --menu-radius: 0px;
+}
+.tab.current { text-transform: uppercase; }
+```
+
+To start from a theme and change it, `lore theme parchment` writes that theme to
+`ui/menus.css` (it never writes over one you have). `lore theme` lists the themes.
+
+**Your own page.** A file of the same name in `ui` takes the place of the engine's
+page for that screen:
+
+| File | Screen |
+|---|---|
+| `ui/pause-menu.html` | The first screen of the pause menu |
+| `ui/settings-menu.html` | The settings and their tabs, Controls among them |
+| `ui/quit-menu.html` | "Quit the game?" |
+| `ui/game-menu.html` | Every menu your script makes with `game.menu` |
+| `ui/menu-keyboard.html` | The on-screen keyboard |
+
+The engine fills the page in, so keep the ids it fills: `#rows` (the rows), and as you
+like `#tabs`, `#more` (the "more below" line), `#keys` (which buttons do what),
+`#shade` (the dim over the game) and `#menu` (the panel, placed by a menu made with a
+place). The keyboard reads its keys from the page: each `.key` in each `.keyrow`, with
+`data-key="shift"`, `"space"`, `"back"` or `"done"` on the special ones. The engine's
+own pages are the place to start; they say what each part is in a comment at their
+top.
+
+The engine puts these on what it fills, for your sheet to style:
+
+| Element | Classes |
+|---|---|
+| `body` | the screen's name (`pause-menu`, `settings-menu`, `quit-menu`, `game-menu`, `menu-keyboard`); `shut` while it is closed |
+| `.tab` | `current` on the tab in front; `#tabs` has `single` on a screen of one menu |
+| `.row` | its kind (`button`, `toggle`, `slider`, `choice`, `text-box`, `info`); `chosen` on the row the player is on; `on` on a toggle that is on; `empty` and `typing` on a text box |
+| inside a row | `.mark`, `.label`, `.value`; a toggle's `.switch` and `.knob`; a slider's `.track`, `.fill` and `.knob`; a choice's `.arrow.back`, `.word` and `.arrow.next`; a text box's `.word` and `.caret` |
+| `.key` | `chosen` on the key the player is on, `on` on Shift while capitals are on |
+
+`game.menu.style` still works: each of its colours is one of the variables
+(`style.back` is `--menu-back`, `style.chosenWords` is `--menu-chosen-words`), and
+one your script sets wins over the theme and your sheet.
+
+Every variable, with what the engine starts it at:
+
+| Variable | What it is | Engine's own |
+|---|---|---|
+| `--menu-back` | The panel | dark, nearly opaque |
+| `--menu-chosen` | Behind the chosen row and the tab in front | faint white |
+| `--menu-words`, `--menu-chosen-words`, `--menu-quiet` | Words, the chosen row's words, words that only tell | white, gold, dim white |
+| `--menu-on`, `--menu-off` | A toggle on and off | green, grey |
+| `--menu-bar`, `--menu-knob`, `--menu-track` | A slider's fill, knob and track | blue, white, faint |
+| `--menu-ring` | The focus ring, the mark and the caret | `--menu-chosen-words` |
+| `--menu-accent`, `--menu-shadow`, `--menu-edge`, `--menu-shade`, `--menu-key` | Line along the top, shadow, border, dim over the game, a key's cap | none, soft black, faint white, black at 60%, faint white |
+| `--menu-font`, `--menu-weight`, `--menu-tab-weight`, `--menu-tab-case`, `--menu-tab-spacing` | Type | the engine's font, normal, bold, none, normal |
+| `--menu-text`, `--menu-small`, `--menu-tab` | Sizes | 28px, 22px, 30px |
+| `--menu-radius`, `--menu-row-radius`, `--menu-line`, `--menu-ring-width`, `--menu-pad`, `--menu-row` | Shape | 12px, 8px, 1px, 2px, 14px, 44px |
+| `--menu-open`, `--menu-move`, `--menu-ease`, `--menu-rise` | Motion: opening, the highlight moving, its easing, how far a menu rises as it opens | 0.16s, 0.09s, ease-out, 14px |
+
+Keep a row 44px high (`--menu-row`): the engine works out how many rows fit on the
+screen from it, and scrolls the rest.
+
+**Motion.** A menu rises and fades in as it opens (a transition from `body.shut` to
+open), the ring and the mark ease from row to row, and the caret blinks. A menu
+closes at once, so the next screen is there the moment the player asks. The player's
+setting **Reduce motion**, on the Gameplay tab, stops all of it, on these menus and
+on every screen of yours, the starter stylesheet's animations too: each goes
+straight to where it ends. `game.ui.reduceMotion = true` does the same from a script.
+
+**Reading from a sofa.** Words are 28px and the smallest 22px on a screen 1080 high
+(and scale with the player's "HUD and menu size"). The row the player is on has a
+ring, a fill and a mark at its left, so it shows on any colour and to a player who
+does not tell colours apart; a toggle says "on" or "off" in words as well as its
+switch; the tab in front is underlined. Keep these when you restyle.
+
+A mistake in `ui/menus.css` or in a page of your own is on the error panel with its
+file and line, as any screen's is, and the engine's own page (or the page without
+your sheet) is used, so a menu is never blank. Both reload when saved, menus that are
+open too. `lore check` reads them.
 
 ## Hot reload
 

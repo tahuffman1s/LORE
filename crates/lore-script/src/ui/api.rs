@@ -67,6 +67,11 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             lua.create_string(&out)
         })?,
     )?;
+    let state = Rc::clone(shared);
+    ui.set(
+        "theme",
+        lua.create_function(move |lua, name: Value| theme(lua, &state, &name))?,
+    )?;
     ui.set("sounds", sounds(lua, shared)?)?;
 
     // `reduceMotion` is a value that can be set, so the table answers for it.
@@ -77,7 +82,7 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
         lua.create_function(move |lua, (_, key): (Value, Value)| {
             let key = key_text(&key);
             if key == "reduceMotion" {
-                return Ok(Value::Boolean(state.ui.reduce_motion()));
+                return Ok(Value::Boolean(state.ui.script_reduce_motion()));
             }
             if key == "onScreenKeyboard" {
                 return Ok(Value::Boolean(state.ui.on_screen_keyboard()));
@@ -215,6 +220,49 @@ pub(crate) fn screen_value(lua: &Lua, id: ScreenId) -> mlua::Result<AnyUserData>
     lua.create_userdata(ScreenRef(id))
 }
 
+/// `game.ui.theme(name)`: picks one of the ready-made looks of the engine's
+/// menus, or with nil goes back to the engine's own.
+fn theme(lua: &Lua, shared: &Rc<Shared>, name: &Value) -> mlua::Result<()> {
+    let names = || super::menus::THEMES.iter().map(|(theme, _)| *theme);
+    let list = || names().collect::<Vec<_>>().join(", ");
+    let wanted = match name {
+        Value::Nil => None,
+        // Any capitals: "Parchment" is parchment.
+        Value::String(text) => Some(text.to_string_lossy().to_lowercase()),
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.ui.theme needs the name of a theme in quotes, or nil for the engine's \
+                     own, but it was given {}. Write it like this: game.ui.theme(\"parchment\"). \
+                     The themes are: {}.",
+                    describe(other),
+                    list()
+                ),
+            ));
+        }
+    };
+    if let Some(wanted) = &wanted
+        && !names().any(|known| known == wanted)
+    {
+        let lower = wanted.to_lowercase();
+        let hint = match closest(&lower, names()) {
+            Some(near) => format!(" Did you mean game.ui.theme(\"{near}\")?"),
+            None => String::new(),
+        };
+        return Err(fail(
+            lua,
+            format!(
+                "game.ui.theme: there is no look called \"{wanted}\".{hint} The themes are: {}. \
+                 For a look of your own, write ui/menus.css in your game's folder.",
+                list()
+            ),
+        ));
+    }
+    shared.ui.set_theme(wanted);
+    Ok(())
+}
+
 fn no_such_member(lua: &Lua, key: &str) -> mlua::Error {
     let mut message = format!("game.ui.{key} does not exist.");
     let names = || UI_FUNCTIONS.iter().copied().chain(["sounds"]);
@@ -302,6 +350,11 @@ fn load(
     }
     let id = shared.ui.load(&path, pauses);
     lua.create_userdata(ScreenRef(id))
+}
+
+/// The screen a value a script holds is.
+pub(crate) fn screen_id(lua: &Lua, this: &Value) -> mlua::Result<ScreenId> {
+    screen_of(lua, this, "screen").map(|(_, id)| id)
 }
 
 /// The screen a method was called on, or the mistake to explain.

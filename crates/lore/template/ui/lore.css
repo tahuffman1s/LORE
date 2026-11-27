@@ -8,7 +8,10 @@
    Some classes only add to another: `fill` and `ghost` go inside a `bar`;
    `on`, `out`, `current` and `selected` are added to a `chip`, a `toast`,
    a `tab` and a `slot`.
-   The classes are listed on the Game screens page of the LORE docs. */
+   The classes are listed on the Game screens page of the LORE docs.
+   Everything that moves here (the anim- classes, ease-, the bars) stops and
+   shows where it ends when the player turns on Reduce motion in the pause
+   menu's Gameplay tab, or a script sets game.ui.reduceMotion = true. */
 
 /* ---------- tokens and themes ---------- */
 body {

@@ -1,0 +1,31 @@
+<!-- The page every menu of game.menu is drawn on: the pause menu, the
+     settings and their Controls tab, the question before quitting, and a
+     game's own menus. The menu kit fills it in:
+
+       #shade  the dim over the game, shown with the class "on" (the pause menu)
+       #menu   the panel. A menu made with a place has it as left, top, width
+       #tabs   one .tab per menu (.current is the one in front); .single on
+               #tabs when the screen is one menu, its title alone
+       #rows   one .row per row: .button, .toggle, .slider, .choice,
+               .text-box or .info, with .chosen on the one the player is on.
+               Inside: .mark, .label and .value, and
+                 a toggle: .switch holding .knob, and .on on the row
+                 a slider: .track holding .fill and .knob
+                 a choice: .value holds .arrow.back, .word and .arrow.next
+                 a text box: .value holds .word and .caret; .empty while it
+                 shows its placeholder, .typing while it is typed into
+       #more   "more above" and "more below", or the menu's message
+       #keys   the buttons that work the menu, as the player has them bound
+
+     A game's ui/pause-menu.html (or settings-menu.html, quit-menu.html,
+     game-menu.html) takes this page's place: keep #rows, and any of the others
+     it wants. Style it all in ui/menus.css. -->
+<body>
+  <div id="shade"></div>
+  <div id="menu">
+    <div id="tabs"></div>
+    <div id="rows"></div>
+    <div id="more"></div>
+    <div id="keys"></div>
+  </div>
+</body>

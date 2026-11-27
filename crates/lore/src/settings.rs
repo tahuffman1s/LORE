@@ -266,6 +266,11 @@ settings! {
     /// true hurts the player who lands from high up; false lets them land
     /// from any height unhurt.
     fall_damage: bool = true, Shape::Toggle, "Gameplay", "Fall damage";
+    /// true stops what slides, fades and blinks on the menus and on every
+    /// screen of the game: each goes straight to where it ends. For
+    /// players whom motion bothers. A script can ask for the same with
+    /// `game.ui.reduceMotion = true`.
+    reduce_motion: bool = false, Shape::Toggle, "Gameplay", "Reduce motion";
     /// How loud everything is, from 0 (silent) to 100 (full).
     volume: f32 = 100.0, Shape::Number(Settings::VOLUME), "Sound", "Volume";
     /// How loud music is, from 0 (off) to 100 (full). It is turned down by
@@ -1079,6 +1084,7 @@ mod tests {
             difficulty: 100.0,
             game_speed: 70.0,
             fall_damage: false,
+            reduce_motion: true,
             volume: 35.0,
             music_volume: 0.0,
             speech_volume: 60.0,
@@ -1242,7 +1248,7 @@ mod tests {
                 "line 1: `volume` must be a number from 0 to 100. It keeps its usual value, 100.",
                 "line 2: `sensitivity` goes from 0.05 to 5, so 9 was changed to 5.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
-                 `difficulty`, `game_speed`, `fall_damage`, `volume`, `music_volume`, \
+                 `difficulty`, `game_speed`, `fall_damage`, `reduce_motion`, `volume`, `music_volume`, \
                  `speech_volume`, `effects_volume`, `mouse_sensitivity`, \
                  `stick_sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `night_brightness`, \

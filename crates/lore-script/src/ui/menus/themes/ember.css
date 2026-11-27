@@ -1,0 +1,52 @@
+/* Ember: charcoal and banked fire, square corners, gold for the row the
+   player is on, and tabs in capitals. Pick it with game.ui.theme("ember"),
+   or copy it to your game's ui/menus.css and change what you like. */
+
+body {
+  --menu-back: rgba(20, 14, 12, 0.94);
+  --menu-chosen: rgba(214, 120, 40, 0.2);
+  --menu-words: #f3e6d8;
+  --menu-chosen-words: #ffc46b;
+  --menu-quiet: #b59c86;
+  --menu-on: #f0a040;
+  --menu-off: #6e5a4c;
+  --menu-bar: #d2562a;
+  --menu-knob: #ffc46b;
+  --menu-accent: #d2562a;
+  --menu-shadow: rgba(0, 0, 0, 0.7);
+  --menu-shade: rgba(16, 6, 2, 0.62);
+  --menu-ring: #ffc46b;
+  --menu-edge: rgba(210, 86, 42, 0.45);
+  --menu-track: rgba(243, 230, 216, 0.14);
+  --menu-key: rgba(243, 230, 216, 0.08);
+
+  --menu-tab-case: uppercase;
+  --menu-tab-spacing: 4px;
+  --menu-tab: 24px;
+
+  --menu-radius: 0px;
+  --menu-row-radius: 0px;
+  --menu-line: 1px;
+
+  --menu-open: 0.24s;
+  --menu-rise: 0px;
+}
+
+/* It slides in from the left edge. */
+body.shut #menu {
+  transform: translateX(-40px);
+}
+
+/* A warm glow under the panel and round the row the player is on. */
+#menu,
+#board {
+  box-shadow: 0 0 40px rgba(210, 86, 42, 0.25), 0 12px 30px var(--menu-shadow);
+}
+
+.row.chosen {
+  box-shadow: 0 0 18px rgba(255, 196, 107, 0.25);
+}
+
+.tab.current {
+  background-color: transparent;
+}
