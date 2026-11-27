@@ -195,6 +195,9 @@ pub struct ScriptHost {
     body: Rc<crate::body_api::BodyState>,
     /// Hurts the script has not yet heard of; they outlive a reload too.
     health: Rc<crate::health_api::HealthState>,
+    /// Who likes whom: the game's sides and the grudges its people hold.
+    /// It outlives a reload too.
+    sides: Rc<crate::sides_api::SidesState>,
     lighting: Rc<crate::lighting_api::LightingState>,
     look: Rc<crate::look_api::LookState>,
     /// Where the script said the world is seen from; it outlives a reload too.
@@ -541,6 +544,7 @@ impl ScriptHost {
             lamps: Rc::default(),
             body: Rc::default(),
             health: Rc::default(),
+            sides: Rc::default(),
             lighting: Rc::default(),
             look: Rc::default(),
             camera: Rc::default(),
@@ -653,6 +657,7 @@ impl ScriptHost {
         // A turn of the dial is heard even while paused: the pause menu is
         // where the player turns it.
         self.difficulty_due();
+        self.feelings_due();
         // Hours passed by the clock, or skipped by a timer, a menu or the
         // start, are heard before the tick's rules read the hour.
         if !stopped {
@@ -1261,6 +1266,69 @@ impl ScriptHost {
         self.difficulty.scales()
     }
 
+    /// Who likes whom: the game's sides, how each feels about the others,
+    /// who is on which and the grudges each holds. It is story state: what
+    /// a save keeps of it is this, whole. The world reads it on its tick
+    /// ([`lore_npc::Sides::is_enemy`] is a rule's "an enemy").
+    #[must_use]
+    pub fn sides(&self) -> std::cell::Ref<'_, lore_npc::Sides> {
+        self.sides.table.borrow()
+    }
+
+    /// The table of [`sides`](Self::sides), for the world to change on its
+    /// tick: the time, what people suffered, saw and told each other.
+    pub fn sides_mut(&mut self) -> std::cell::RefMut<'_, lore_npc::Sides> {
+        self.sides.table.borrow_mut()
+    }
+
+    /// Puts into `into` (emptied first) every hurt someone dealt someone
+    /// since this was last asked, oldest first: what the world's people
+    /// hold against whom, and what they may have seen.
+    pub fn take_deeds(&mut self, into: &mut Vec<crate::Deed>) {
+        self.health.take_deeds(into);
+    }
+
+    /// Calls every `game.onFeelingChange` function as if one side had come
+    /// to feel otherwise about another (the first two sides in the table:
+    /// an enemy become a friend, or anything else become an enemy),
+    /// without changing anything, so that `lore check` runs them. Gives
+    /// how many there are.
+    pub fn pretend_feeling_change(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let count = version.shared.handlers.borrow().feeling.len();
+        if count == 0 {
+            return 0;
+        }
+        let told = {
+            let sides = self.sides.table.borrow();
+            let names: Vec<&str> = sides.names().collect();
+            let (side, toward) = match names.as_slice() {
+                [] => ("Town", "Outlaws"),
+                [only] => (*only, *only),
+                [first, second, ..] => (*first, *second),
+            };
+            let before = sides
+                .find(side)
+                .zip(sides.find(toward))
+                .map_or(lore_npc::Feeling::Neutral, |(a, b)| sides.between(a, b));
+            let now = if before == lore_npc::Feeling::Enemy {
+                lore_npc::Feeling::Friend
+            } else {
+                lore_npc::Feeling::Enemy
+            };
+            (
+                side.to_owned(),
+                toward.to_owned(),
+                now.word(),
+                before.word(),
+            )
+        };
+        self.call_all(|handlers| &handlers.feeling, told);
+        count
+    }
+
     /// Calls every `game.difficulty.onChange` function as if the player had
     /// turned the dial one step harder (or, at the hardest, one easier),
     /// without turning it, so that `lore check` runs them. Gives how many
@@ -1340,6 +1408,25 @@ impl ScriptHost {
             self.tell_hour(hour);
         }
         count
+    }
+
+    /// Tells `game.onFeelingChange` functions of each feeling between two
+    /// sides that changed since the last tick.
+    fn feelings_due(&mut self) {
+        if self.paused || self.running.is_none() {
+            return;
+        }
+        for changed in self.sides.take_waiting() {
+            self.call_all(
+                |handlers| &handlers.feeling,
+                (
+                    changed.side,
+                    changed.toward,
+                    changed.now.word(),
+                    changed.before.word(),
+                ),
+            );
+        }
     }
 
     /// Tells `game.difficulty.onChange` functions of each turn of the dial
@@ -1820,6 +1907,7 @@ impl ScriptHost {
             version.shared.handles.forget(character);
         }
         self.weapons.forget(character);
+        self.sides.table.borrow_mut().forget(character.number());
     }
 
     /// Says how a character is moving: what the script reads as `velocity`,
@@ -2884,10 +2972,13 @@ impl ScriptHost {
         // The new version names its own steps of difficulty, or has the
         // engine's if it names none.
         let steps = self.difficulty.usual_steps();
+        // Who likes whom, to put back if the new version fails to load.
+        let sides = self.sides.table.borrow().clone();
         if let Err(error) = self.install() {
             self.live_set.live.set(before);
             self.clock.set_paused(was_paused);
             self.difficulty.restore_steps(steps);
+            self.sides.table.replace(sides);
             return Err(error);
         }
         if self.live_set.live.get() != before {
@@ -2908,6 +2999,9 @@ impl ScriptHost {
     /// Builds a version from the game's scripts and makes it the running one.
     fn install(&mut self) -> Result<(), ScriptError> {
         let before = self.shaders.begin_load();
+        // The file says what the sides are: a version that does not call
+        // game.sides has none.
+        self.sides.declared.set(false);
         let (touched, built) = self.build();
         // A version that failed is fixed by saving one of the files it read,
         // or one the running version did.
@@ -2936,6 +3030,9 @@ impl ScriptHost {
                              have started again."
                         );
                     }
+                }
+                if !self.sides.declared.get() {
+                    crate::sides_api::none_declared(&version.shared);
                 }
                 self.follow_actions(&version.shared.actions);
                 self.running = Some(version);
@@ -3019,6 +3116,7 @@ impl ScriptHost {
             shaders: Rc::clone(&self.shaders),
             body: Rc::clone(&self.body),
             health: Rc::clone(&self.health),
+            sides: Rc::clone(&self.sides),
             lighting: Rc::clone(&self.lighting),
             look: Rc::clone(&self.look),
             camera: Rc::clone(&self.camera),

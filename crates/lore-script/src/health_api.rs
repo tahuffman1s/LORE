@@ -41,10 +41,24 @@ pub(crate) struct Hurt {
     pub died: bool,
 }
 
-/// The hurts waiting for the script, shared by every version of it.
+/// One character hurt by another: what the world's people hold against
+/// whom, and what they may see done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deed {
+    /// Who was hurt.
+    pub victim: CharacterId,
+    /// Who hurt them.
+    pub by: CharacterId,
+    /// Whether it took the last of their health.
+    pub killed: bool,
+}
+
+/// The hurts waiting for the script, shared by every version of it, and
+/// those waiting for the world.
 #[derive(Debug, Default)]
 pub(crate) struct HealthState {
     waiting: RefCell<Vec<Hurt>>,
+    deeds: RefCell<Vec<Deed>>,
 }
 
 /// The most hurts kept for the script between two points it hears them.
@@ -55,7 +69,25 @@ impl HealthState {
         std::mem::take(&mut *self.waiting.borrow_mut())
     }
 
+    /// Puts the deeds since the last call into `into`, emptied first.
+    pub(crate) fn take_deeds(&self, into: &mut Vec<Deed>) {
+        into.clear();
+        std::mem::swap(&mut *self.deeds.borrow_mut(), into);
+    }
+
     fn push(&self, hurt: Hurt) {
+        if let Some(by) = hurt.from
+            && by != hurt.victim
+        {
+            let mut deeds = self.deeds.borrow_mut();
+            if deeds.len() < MOST_WAITING {
+                deeds.push(Deed {
+                    victim: hurt.victim,
+                    by,
+                    killed: hurt.died,
+                });
+            }
+        }
         let mut waiting = self.waiting.borrow_mut();
         if waiting.len() < MOST_WAITING {
             waiting.push(hurt);

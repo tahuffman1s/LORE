@@ -442,7 +442,7 @@ Shorthands, written out to the longhands above:
 | `inset` | `top`, `right`, `bottom`, `left` | same 1 to 4 pattern. |
 | `border-width`, `border-style`, `border-color` | the four sides | 1 to 4 values. |
 | `border`, `border-top`, `border-right`, `border-bottom`, `border-left` | width, style, colour | In any order. **Style is `none` unless you write `solid`**, so `border: 2px red` draws nothing; write `border: 2px solid red`. Width is 3px if left out, colour is the text colour. |
-| `border-radius` | the four corners | 1 to 4 values, from the top-left clockwise. No `/`. A percentage is of the box's shorter side, so on a box that is not square the corner is drawn round; ovals are #612. |
+| `border-radius` | the four corners | 1 to 4 values, from the top-left clockwise. A percentage is of the box's width across and its height down, so `50%` on a box that is not square is an ellipse; a length is a round corner. No `/`: an oval corner is written as a percentage. |
 | `background` | colour, picture | One colour and/or one picture (`url(name)` or a gradient). Resets size and position. |
 | `border-image` | source, slice, width | `border-image: url(frame) 12 fill / 12px;`. |
 | `outline` | width, style, colour | Same rules as `border`. |
@@ -516,6 +516,18 @@ If you know HTML and CSS from web pages, these are different here, on purpose.
   focusable element in page order. It does not move yet.
 - **Click bubbling.** A click goes to the element's `onclick`, or to the nearest ancestor that has one.
 - **The hovered element is the deepest box under the pointer**, so a plain `div` can have a `:hover` look.
+  The pointer meets a box where it is drawn: turned and scaled, round corners and all,
+  and cut by the same `overflow` boxes as the picture.
+- **An element with `opacity` below 1 fades as one picture**, with everything in it, as on
+  the web: a panel at half shows its buttons on top of it as they are, not the panel through
+  them. A group whose parts do not overlap costs nothing; one whose parts do is drawn into a
+  layer of its own first. A frame has four layers: when more faded groups than that overlap,
+  or sit one inside another, the rest fade part by part and the log says so once.
+- **`overflow: hidden` on a turned or scaled box cuts along the turned edges**, round
+  corners and all. A box cut by two clips turned different ways keeps the inner one exactly
+  and, of the outer, the straight box round it on the screen.
+- **A `box-shadow` is not drawn under its own box**, so a see-through box does not show its
+  shadow through itself.
 - **The built-in look** is a light outline and a faint fill on `button`, `input` and `select`
   (`8px 16px` padding, 6px corners), with a lighter fill on hover and press. Your CSS always beats it,
   whatever its specificity.
@@ -595,13 +607,14 @@ Hidden, disabled and zero-sized controls are not listed (they are meant to be ou
 - `type_text` and `backspace` edit the focused text box, up to its `maxlength`.
   Control characters are dropped.
 - A transform is undone when finding what is under the pointer, so a scaled button is
-  hit where it is drawn.
+  hit where it is drawn; its round corners and the clips of the boxes round it count too.
 
 ## What comes out: the frame
 
 `frame()` returns the draw list, back to front: shadows, rectangles (fill, border, outlines, focus ring,
 slider fills, tick marks, scroll bar thumbs), pictures and text runs, each with its transform, opacity
-and clip. It also returns the pointer areas (`hits`, front to back) and the cursor to show.
+and clip (a rounded box with a transform of its own), and a group start and end round each element
+that fades, to be drawn as one picture. It also returns the pointer areas (`hits`, front to back) and the cursor to show.
 A frame costs nothing when the screen has not changed. Rebuilding one reuses its memory.
 
 Sizes the screen needs from the game: the screen size (`set_size`, in px on a screen 1080 high),
@@ -676,4 +689,4 @@ They are kept as warnings with the same shape.
 So you do not look for it: no `<table>`, `<ul>`, `<a>`, `<form>`, `<textarea>`, `<canvas>` or `<script>`
 (behaviour is Luau, named by `onclick` and friends); no `grid`, `float`, inline-block or tables;
 no `@media`, `@import` or `@font-face`; no attribute selectors, sibling selectors or `::before`;
-no `repeating-` gradients; no oval corners (a percentage corner on a box that is not square is drawn round, #612); no text selection, no multi-line text boxes; no right-to-left text.
+no `repeating-` gradients; no two-value corners (`40px / 20px`: a percentage gives an oval); no text selection, no multi-line text boxes; no right-to-left text.

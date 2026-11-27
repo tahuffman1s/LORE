@@ -3,7 +3,7 @@
 
 use std::fmt::{self, Write};
 
-use crate::fill::{Clip, Fill, FontFace, Stop, StoredFill, Transform};
+use crate::fill::{Clip, Fill, FontFace, Radii, Stop, StoredFill, Transform};
 use crate::node::Rect;
 use crate::theme::Color;
 
@@ -74,7 +74,7 @@ pub enum Draw<'a> {
         /// Width and height.
         size: [f32; 2],
         /// How round each corner is.
-        radii: [f32; 4],
+        radii: Radii,
         /// What the box is filled with.
         fill: Fill<'a>,
         /// How thick the border is on each side, inside the box's edge.
@@ -89,16 +89,15 @@ pub enum Draw<'a> {
     /// The soft shadow of a rounded box, drawn outside it or inside it.
     ///
     /// `position` and `size` are the box that casts it; the shadow grows
-    /// past that by itself. An outside shadow is not cut out under the
-    /// box, so draw the box on top of it, and keep the box solid if the
-    /// shadow should not show through.
+    /// past that by itself. An outside shadow is drawn only outside the
+    /// box, so it never shows through a box that is see-through.
     Shadow {
         /// The top-left corner of the box that casts it, before `transform`.
         position: [f32; 2],
         /// Width and height of that box.
         size: [f32; 2],
         /// How round each corner of the box is.
-        radii: [f32; 4],
+        radii: Radii,
         /// The colour of the shadow at its darkest.
         color: Color,
         /// How far the shadow is moved across and down.
@@ -116,6 +115,19 @@ pub enum Draw<'a> {
         /// Only what is inside this is drawn.
         clip: Option<Clip>,
     },
+    /// The start of a group: everything drawn until the [`Draw::EndGroup`]
+    /// that matches it is drawn as one picture, which is then laid over
+    /// what is behind it at `opacity`. A panel faded this way shows its
+    /// own parts on top of each other as they are, not each one through
+    /// the next. Groups may be inside groups. One left open is closed at
+    /// the end of the list.
+    Group {
+        /// How solid the group is as a whole, from 0 to 1.
+        opacity: f32,
+    },
+    /// The end of the last [`Draw::Group`] still open. One with no group
+    /// open is skipped.
+    EndGroup,
 }
 
 /// A draw command as stored: text is a range into one shared string, so
@@ -151,7 +163,7 @@ pub(crate) enum Command {
     Box {
         position: [f32; 2],
         size: [f32; 2],
-        radii: [f32; 4],
+        radii: Radii,
         fill: StoredFill,
         border_widths: [f32; 4],
         border_color: Color,
@@ -161,7 +173,7 @@ pub(crate) enum Command {
     Shadow {
         position: [f32; 2],
         size: [f32; 2],
-        radii: [f32; 4],
+        radii: Radii,
         color: Color,
         offset: [f32; 2],
         blur: f32,
@@ -170,6 +182,10 @@ pub(crate) enum Command {
         transform: Transform,
         clip: Option<Clip>,
     },
+    Group {
+        opacity: f32,
+    },
+    EndGroup,
 }
 
 /// Everything to draw this frame, back to front.
@@ -189,6 +205,8 @@ pub(crate) enum Command {
 ///         Draw::Box { position, .. } | Draw::Shadow { position, .. } => {
 ///             println!("styled box at {position:?}")
 ///         }
+///         Draw::Group { opacity } => println!("a group at {opacity}"),
+///         Draw::EndGroup => println!("the end of a group"),
 ///     }
 /// }
 /// ```
@@ -319,8 +337,11 @@ impl DrawBuffer {
                     transform,
                     clip,
                 },
-                other
-                @ (Command::Rect { .. } | Command::Turned { .. } | Command::Shadow { .. }) => other,
+                other @ (Command::Rect { .. }
+                | Command::Turned { .. }
+                | Command::Shadow { .. }
+                | Command::Group { .. }
+                | Command::EndGroup) => other,
             }));
     }
 
@@ -421,6 +442,8 @@ impl DrawBuffer {
                 transform,
                 clip,
             },
+            Draw::Group { opacity } => Command::Group { opacity },
+            Draw::EndGroup => Command::EndGroup,
         };
         self.commands.push(command);
     }
@@ -539,6 +562,8 @@ impl<'a> Iterator for DrawIter<'a> {
                 transform,
                 clip,
             },
+            Command::Group { opacity } => Draw::Group { opacity },
+            Command::EndGroup => Draw::EndGroup,
         })
     }
 
@@ -663,7 +688,7 @@ impl Painter<'_> {
         self.commands.push(Command::Box {
             position: [rect.x * scale, rect.y * scale],
             size: [rect.w * scale, rect.h * scale],
-            radii: radii.map(|radius| radius * scale),
+            radii: Radii::from(radii).map(|radius| radius * scale),
             fill,
             border_widths: border_widths.map(|width| width * scale),
             border_color,
@@ -693,7 +718,7 @@ impl Painter<'_> {
         self.commands.push(Command::Shadow {
             position: [rect.x * scale, rect.y * scale],
             size: [rect.w * scale, rect.h * scale],
-            radii: radii.map(|radius| radius * scale),
+            radii: Radii::from(radii).map(|radius| radius * scale),
             color,
             offset: offset.map(|value| value * scale),
             blur: blur * scale,
@@ -738,6 +763,16 @@ impl Painter<'_> {
             transform: transform.scaled(scale),
             clip: clip.map(|clip| scaled_clip(clip, scale)),
         });
+    }
+
+    /// Starts a group drawn as one picture at `opacity`; see [`Draw::Group`].
+    pub(crate) fn group(&mut self, opacity: f32) {
+        self.commands.push(Command::Group { opacity });
+    }
+
+    /// Ends the group [`group`](Self::group) started.
+    pub(crate) fn end_group(&mut self) {
+        self.commands.push(Command::EndGroup);
     }
 
     /// Keeps a fill's gradient colours in the shared list.
@@ -791,5 +826,7 @@ fn scaled_clip(clip: Clip, scale: f32) -> Clip {
         position: clip.position.map(|value| value * scale),
         size: clip.size.map(|value| value * scale),
         radii: clip.radii.map(|value| value * scale),
+        transform: clip.transform.scaled(scale),
+        within: clip.within.map(|within| within.map(|value| value * scale)),
     }
 }

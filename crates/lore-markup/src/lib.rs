@@ -37,7 +37,9 @@ pub use focus::{Direction, Event, EventKind, EventValue, Unreachable};
 pub use html::{Parsed, StyleBlock, StylesheetLink, parse, parse_fragment};
 pub use intern::{Atom, Interner};
 pub use layout::{FontRef, TextMeasure};
-pub use paint::{Clip, ColorStop, Common, Fill, Frame, Hit, NineSlice, Paint, Rect, TextShadow};
+pub use paint::{
+    Clip, ColorStop, Common, Fill, Frame, Hit, NineSlice, Paint, Radii, Rect, TextShadow,
+};
 pub use screen::Screen;
 pub use selector::{
     Combinator, Compound, ElementState, NoState, PseudoClass, Selector, Specificity, matches,

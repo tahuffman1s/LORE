@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 # Where a person can walk in the level: `game.canWalk` and `game.findWay`.
 lore-nav = { path = "../lore-nav" }
+# Who likes whom: the sides table and grudges, for `game.sides`.
+lore-npc = { path = "../lore-npc" }
 lore-input = { path = "../lore-input" }
 # Where a HUD piece is pinned and its colour, for `game.hud`.
 lore-ui = { path = "../lore-ui" }

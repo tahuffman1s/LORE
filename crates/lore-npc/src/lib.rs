@@ -14,14 +14,20 @@
 //! - [`Gaze`]: where a head turns to look at someone, within what a person's
 //!   neck allows, and how quickly it gets there.
 //! - [`push_out`]: how far to move one upright body out of another's way.
+//! - [`Sides`]: who likes whom: the game's sides, how each feels about the
+//!   others, and the grudges each person holds. [`Sides::is_enemy`] is what
+//!   a rule's "an enemy" means.
 //! - [`Senses`]: what an NPC sees (a cone that walls block) and hears (the
 //!   very noises the player hears), kept as plain data for awareness and
 //!   rules to read.
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod apart;
 mod gaze;
 mod mind;
 mod senses;
+mod sides;
 mod walk;
 
 pub use apart::{Upright, push_out};
@@ -31,6 +37,11 @@ pub use senses::{
     CLEARLY, HEARD_FROM, Heard, KEEP_LOST, Keenness, LOOK_EVERY, LOST_BELOW, Looker, MOST_HEARD,
     MOST_SIGHTED, NIGHT, SEEN_FROM, Seeable, Sensed, Senses, Sight, Sighting, Sound, THROUGH_WALL,
     arriving, daylight, haze, lamp_lux, light_helps, lit, seen_openly, showing,
+};
+pub use sides::{
+    Act, DEFAULT_FORGIVES, DEFAULT_REMEMBERS, FORGIVES_ALL, FORGIVING_SECONDS, Feeling,
+    FeelingChange, GRUDGES, LONGEST_NAME, MOST_SIDES, Side, SideSaid, Sides, SidesError, Taken,
+    Temper, Toward,
 };
 pub use walk::{
     Blocker, Face, Goal, Going, News, Passing, STROLL, Trouble, Walk, pass, turned_toward,

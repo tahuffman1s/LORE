@@ -355,7 +355,7 @@ fn mistakes_with_the_player_say_what_to_write() {
         said.contains(", and the functions game.player:giveWeapon,"),
         "{said}"
     );
-    assert!(said.ends_with("game.player:block."), "{said}");
+    assert!(said.ends_with("game.player:forgive."), "{said}");
     assert_eq!(
         spawn_error("game.player.takeWeapon()"),
         "takeWeapon needs a colon before it, not a dot, because it acts on the one it is \

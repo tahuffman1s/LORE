@@ -923,12 +923,25 @@ const HIGH: u32 = 270;
 /// into `WIDE` by `HIGH` images of `format` with that list drawn over it,
 /// and returns each frame's RGBA pixels.
 fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<Vec<u8>> {
-    let device = gpu.device();
     let extent = vk::Extent2D {
         width: WIDE,
         height: HIGH,
     };
-    let bytes = u64::from(WIDE * HIGH * 4);
+    overlaid_sized(gpu, format, extent, lists).0
+}
+
+/// As [`overlaid`], into images `extent` in size, and also how long the
+/// graphics card took over all the frames, from each one being handed over
+/// to its being finished.
+fn overlaid_sized(
+    gpu: &Arc<Gpu>,
+    format: vk::Format,
+    extent: vk::Extent2D,
+    lists: &[DrawList<'_>],
+) -> (Vec<Vec<u8>>, std::time::Duration) {
+    let device = gpu.device();
+    let bytes = u64::from(extent.width * extent.height * 4);
+    let mut took = std::time::Duration::ZERO;
     let mut scene_view = SceneView::new(gpu, extent, Upscaling::Off).unwrap();
     let mesh = MeshPipeline::new(gpu, 1).unwrap();
     let mut tonemap = TonemapPipeline::new(gpu, format).unwrap();
@@ -996,7 +1009,7 @@ fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<V
                     1.0 / 60.0,
                 )
                 .unwrap();
-            ui.prepare(commands, 0, &mut overlay).unwrap();
+            ui.prepare(commands, 0, &mut overlay, extent).unwrap();
             tonemap
                 .record(
                     commands,
@@ -1023,6 +1036,7 @@ fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<V
             device.end_command_buffer(commands).unwrap();
             device.reset_fences(&[fence]).unwrap();
             let buffers = [vk::CommandBufferSubmitInfo::default().command_buffer(commands)];
+            let started = std::time::Instant::now();
             device
                 .queue_submit2(
                     gpu.queue(),
@@ -1031,6 +1045,7 @@ fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<V
                 )
                 .unwrap();
             device.wait_for_fences(&[fence], true, u64::MAX).unwrap();
+            took += started.elapsed();
             shots.push(read(gpu, buffer_memory, bytes));
         }
 
@@ -1040,7 +1055,7 @@ fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<V
         device.free_memory(buffer_memory, None);
         picture.destroy(gpu);
     }
-    shots
+    (shots, took)
 }
 
 /// The red, green and blue of the pixel at `x`, `y` of an `overlaid` picture.
@@ -1319,7 +1334,7 @@ fn boxes_have_borders_gradients_shadows_soft_text_and_clips() {
     let plain = |position: [f32; 2], size: [f32; 2], fill, border: f32| Draw::Box {
         position,
         size,
-        radii: [0.0; 4],
+        radii: [0.0; 4].into(),
         fill,
         border_widths: [border; 4],
         border_color: Color::WHITE,
@@ -1355,7 +1370,7 @@ fn boxes_have_borders_gradients_shadows_soft_text_and_clips() {
     buffer.push(Draw::Shadow {
         position: [320.0, 20.0],
         size: [80.0, 40.0],
-        radii: [0.0; 4],
+        radii: [0.0; 4].into(),
         color: Color::WHITE,
         offset: [0.0, 10.0],
         blur: 24.0,
@@ -1373,11 +1388,7 @@ fn boxes_have_borders_gradients_shadows_soft_text_and_clips() {
     // Sharp text, soft text, and text cut down to a box.
     buffer.push(line([20.0, 150.0], 0.0, None));
     buffer.push(line([160.0, 150.0], 10.0, None));
-    let half = Clip {
-        position: [300.0, 150.0],
-        size: [30.0, 70.0],
-        radii: [0.0; 4],
-    };
+    let half = Clip::new([300.0, 150.0], [30.0, 70.0], [0.0; 4].into());
     buffer.push(line([300.0, 150.0], 0.0, Some(half)));
 
     for format in WINDOW_FORMATS {
@@ -1460,5 +1471,351 @@ fn boxes_have_borders_gradients_shadows_soft_text_and_clips() {
         );
         assert_eq!(lit_in(331, 420), 0, "{format:?}: text outside the clip");
     }
+    finish(gpu);
+}
+
+#[test]
+fn a_faded_group_is_one_picture_a_clip_turns_and_a_shadow_stays_outside_its_box() {
+    use lore_ui::{Clip, DrawBuffer, Fill, Transform as Turn};
+
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let grey = Color::rgb(0.5, 0.5, 0.5);
+    let red = Color::rgb(1.0, 0.0, 0.0);
+    let green = Color::rgb(0.0, 1.0, 0.0);
+    let blue = Color::rgb(0.0, 0.0, 1.0);
+    let filled = |position: [f32; 2], size: [f32; 2], color: Color, clip: Option<Clip>| Draw::Box {
+        position,
+        size,
+        radii: [0.0; 4].into(),
+        fill: Fill::Color(color),
+        border_widths: [0.0; 4],
+        border_color: Color::WHITE,
+        transform: Turn::IDENTITY,
+        clip,
+    };
+    let half = |color: Color| Color { a: 0.5, ..color };
+    let mut buffer = DrawBuffer::default();
+    // Everything over one grey, so what is expected is known.
+    buffer.push(filled([0.0, 0.0], [480.0, 270.0], grey, None));
+    // Red under blue, faded as one: where they overlap, only blue shows.
+    buffer.push(Draw::Group { opacity: 0.5 });
+    buffer.push(filled([20.0, 20.0], [100.0, 60.0], red, None));
+    buffer.push(filled([70.0, 40.0], [100.0, 60.0], blue, None));
+    buffer.push(Draw::EndGroup);
+    // What blue alone at half looks like.
+    buffer.push(filled([200.0, 20.0], [20.0, 20.0], half(blue), None));
+    // A group in a group: green, then red under blue, all faded by half
+    // and the inner pair by half again.
+    buffer.push(Draw::Group { opacity: 0.5 });
+    buffer.push(filled([20.0, 150.0], [100.0, 100.0], green, None));
+    buffer.push(Draw::Group { opacity: 0.5 });
+    buffer.push(filled([40.0, 160.0], [60.0, 60.0], red, None));
+    buffer.push(filled([60.0, 180.0], [60.0, 60.0], blue, None));
+    buffer.push(Draw::EndGroup);
+    buffer.push(Draw::EndGroup);
+    // A red box cut by a square turned an eighth of a turn.
+    let diamond = Clip {
+        transform: Turn::about([375.0, 95.0], 1.0, std::f32::consts::FRAC_PI_4),
+        ..Clip::new([325.0, 45.0], [100.0, 100.0], [0.0; 4].into())
+    };
+    buffer.push(filled([300.0, 20.0], [150.0, 150.0], red, Some(diamond)));
+    // A see-through white box with a dark shadow, and one with none.
+    buffer.push(Draw::Shadow {
+        position: [300.0, 190.0],
+        size: [60.0, 60.0],
+        radii: [0.0; 4].into(),
+        color: Color::BLACK,
+        offset: [0.0, 0.0],
+        blur: 16.0,
+        spread: 4.0,
+        inset: false,
+        transform: Turn::IDENTITY,
+        clip: None,
+    });
+    let glass = Color::rgba(1.0, 1.0, 1.0, 0.3);
+    buffer.push(filled([300.0, 190.0], [60.0, 60.0], glass, None));
+    buffer.push(filled([420.0, 190.0], [40.0, 60.0], glass, None));
+
+    for format in WINDOW_FORMATS {
+        let shots = overlaid(&gpu, format, &[buffer.draw()]);
+        let at = |x: f32, y: f32| wide_pixel(&shots[0], x, y);
+        let grey_seen = at(250.0, 120.0);
+
+        // Blue over red in the group is blue alone, faded.
+        let blue_half = at(210.0, 30.0);
+        assert!(
+            close(at(110.0, 70.0), blue_half),
+            "{format:?}: {:?} against {blue_half:?}",
+            at(110.0, 70.0)
+        );
+        assert!(close(at(150.0, 90.0), blue_half), "{format:?}");
+        // Red where blue is not, and grey outside.
+        let [r, g, b] = at(30.0, 30.0);
+        assert!(r > g + 40 && r > b + 40, "{format:?}: {r},{g},{b}");
+        assert!(close(at(190.0, 120.0), grey_seen), "{format:?}");
+
+        // In the inner group, blue covers red: where all three are, it
+        // looks as where only blue and green are. Red shows where blue is
+        // not, and the whole is fainter than the inner group alone.
+        let blue_on_green = at(110.0, 230.0);
+        assert!(
+            close(at(90.0, 210.0), blue_on_green),
+            "{format:?}: {:?} against {blue_on_green:?}",
+            at(90.0, 210.0)
+        );
+        let [r, _, b] = at(50.0, 170.0);
+        assert!(r > b + 20, "{format:?}: {:?}", at(50.0, 170.0));
+        assert!(blue_on_green[2] < blue_half[2], "{format:?}");
+
+        // The clip cuts along the turned square: the corners of the
+        // straight box round it are not drawn, its middle is.
+        assert!(
+            close(at(330.0, 50.0), grey_seen),
+            "{format:?}: {:?}",
+            at(330.0, 50.0)
+        );
+        assert!(close(at(420.0, 140.0), grey_seen), "{format:?}");
+        let [r, g, b] = at(375.0, 95.0);
+        assert!(r > 240 && g < 10 && b < 10, "{format:?}: {r},{g},{b}");
+        // Its edge is a point of the diamond: 70 from the middle along a
+        // side's normal is just inside, 72 just out.
+        assert!(at(375.0, 95.0 - 68.0)[0] > 200, "{format:?}");
+        assert!(close(at(375.0, 95.0 - 73.0), grey_seen), "{format:?}");
+
+        // The shadow is not seen through the see-through box, and is
+        // there round it.
+        let clear = at(440.0, 220.0);
+        assert!(
+            close(at(330.0, 220.0), clear),
+            "{format:?}: {:?} against {clear:?}",
+            at(330.0, 220.0)
+        );
+        assert!(at(330.0, 186.0)[0] + 30 < grey_seen[0], "{format:?}");
+    }
+    finish(gpu);
+}
+
+#[test]
+fn corners_given_in_pixels_are_round_and_soft_by_a_pixel() {
+    use lore_ui::{DrawBuffer, Fill, Transform as Turn};
+
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let (position, size, radius) = ([40.0_f32, 40.0_f32], [120.0_f32, 80.0_f32], 20.0_f32);
+    let mut buffer = DrawBuffer::default();
+    let solid = |position: [f32; 2], size: [f32; 2], color: Color, radius: f32| Draw::Box {
+        position,
+        size,
+        radii: [radius; 4].into(),
+        fill: Fill::Color(color),
+        border_widths: [0.0; 4],
+        border_color: Color::WHITE,
+        transform: Turn::IDENTITY,
+        clip: None,
+    };
+    buffer.push(solid([0.0, 0.0], [480.0, 270.0], Color::BLACK, 0.0));
+    buffer.push(solid(position, size, Color::rgb(1.0, 0.0, 0.0), radius));
+    let shots = overlaid(&gpu, vk::Format::R8G8B8A8_UNORM, &[buffer.draw()]);
+    // How much of each pixel a circle of the radius at each corner covers,
+    // half a pixel either side of its edge.
+    let half = [size[0] / 2.0, size[1] / 2.0];
+    let middle = [position[0] + half[0], position[1] + half[1]];
+    let mut checked = 0;
+    for y in 30..130_u32 {
+        for x in 30..170_u32 {
+            let p = [
+                (x as f32 + 0.5 - middle[0]).abs() - half[0] + radius,
+                (y as f32 + 0.5 - middle[1]).abs() - half[1] + radius,
+            ];
+            if p[0] <= 0.0 || p[1] <= 0.0 {
+                continue;
+            }
+            let outside = (p[0] * p[0] + p[1] * p[1]).sqrt() - radius;
+            let expected = ((0.5 - outside).clamp(0.0, 1.0) * 255.0).round();
+            let red = f32::from(wide_pixel(&shots[0], x as f32, y as f32)[0]);
+            assert!(
+                (red - expected).abs() <= 1.0,
+                "at {x},{y}: {red} where {expected} was expected"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 1000, "{checked}");
+    finish(gpu);
+}
+
+#[test]
+fn a_box_with_percentage_corners_on_a_wide_box_is_an_ellipse() {
+    use lore_ui::{DrawBuffer, Fill, Radii, Transform as Turn};
+
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let solid =
+        |position: [f32; 2], size: [f32; 2], radii: Radii, border: f32, color: Color| Draw::Box {
+            position,
+            size,
+            radii,
+            fill: Fill::Color(color),
+            border_widths: [border; 4],
+            border_color: Color::rgb(0.0, 1.0, 0.0),
+            transform: Turn::IDENTITY,
+            clip: None,
+        };
+    let mut buffer = DrawBuffer::default();
+    let red = Color::rgb(1.0, 0.0, 0.0);
+    buffer.push(solid(
+        [0.0, 0.0],
+        [480.0, 270.0],
+        Radii::SQUARE,
+        0.0,
+        Color::BLACK,
+    ));
+    // 200 by 100, reaching 100 across and 50 down at every corner.
+    let oval = Radii {
+        across: [100.0; 4],
+        down: [50.0; 4],
+    };
+    buffer.push(solid([40.0, 40.0], [200.0, 100.0], oval, 0.0, red));
+    // The same with a border six wide, lower down.
+    buffer.push(solid([40.0, 160.0], [200.0, 100.0], oval, 6.0, red));
+    let shots = overlaid(&gpu, vk::Format::R8G8B8A8_UNORM, &[buffer.draw()]);
+    let at = |x: f32, y: f32| wide_pixel(&shots[0], x, y);
+    let mut checked = 0;
+    for y in 40..140_u32 {
+        for x in 40..240_u32 {
+            // How far outside the ellipse, roughly in pixels.
+            let (dx, dy) = (
+                (x as f32 + 0.5 - 140.0) / 100.0,
+                (y as f32 + 0.5 - 90.0) / 50.0,
+            );
+            let k = (dx * dx + dy * dy).sqrt();
+            let red = at(x as f32, y as f32)[0];
+            if k < 0.97 {
+                assert!(red > 250, "at {x},{y}: {red}");
+                checked += 1;
+            } else if k > 1.03 {
+                assert!(red < 5, "at {x},{y}: {red}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 15_000, "{checked}");
+    // The border follows the ellipse round: green at the ends of both axes,
+    // red inside, nothing past it.
+    for (x, y) in [
+        (43.0, 210.0),
+        (236.0, 210.0),
+        (140.0, 163.0),
+        (140.0, 256.0),
+    ] {
+        let [r, g, _] = at(x, y);
+        assert!(g > 200 && r < 40, "border at {x},{y}: {:?}", at(x, y));
+    }
+    let [r, g, _] = at(140.0, 210.0);
+    assert!(r > 250 && g < 5);
+    assert!(at(50.0, 170.0)[1] < 5, "past the border at a corner");
+    finish(gpu);
+}
+
+/// How long the graphics card takes over a screen full of styled boxes: 320
+/// of them with round corners, a border, a shadow and a number, at 1920 by
+/// 1080, half of them faded as one panel and half each faded on its own;
+/// and the same with each piece faded by itself instead, which is cheaper
+/// and lets the pieces show through each other, and with none faded.
+/// Printed, not checked: run it on its own with `--ignored --nocapture`, on
+/// the software renderer too (`VK_DRIVER_FILES=.../lvp_icd.x86_64.json`).
+#[test]
+#[ignore = "a measurement, not a check"]
+fn the_cost_of_a_screen_of_styled_boxes() {
+    use lore_ui::{DrawBuffer, Fill, FontFace, Transform as Turn};
+
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let extent = vk::Extent2D {
+        width: 1920,
+        height: 1080,
+    };
+    let numbers: Vec<String> = (0..320).map(|n| n.to_string()).collect();
+    let piece = |buffer: &mut DrawBuffer, n: usize, fade: f32| {
+        let position = [8.0 + (n % 19) as f32 * 100.0, 8.0 + (n / 19) as f32 * 58.0];
+        let faded = |color: Color| Color {
+            a: color.a * fade,
+            ..color
+        };
+        buffer.push(Draw::Shadow {
+            position,
+            size: [80.0, 40.0],
+            radii: [12.0; 4].into(),
+            color: faded(Color::rgba(0.0, 0.0, 0.0, 0.5)),
+            offset: [3.0, 3.0],
+            blur: 6.0,
+            spread: 0.0,
+            inset: false,
+            transform: Turn::IDENTITY,
+            clip: None,
+        });
+        buffer.push(Draw::Box {
+            position,
+            size: [80.0, 40.0],
+            radii: [12.0; 4].into(),
+            fill: Fill::Color(faded(Color::rgb(0.2, 0.4, 0.75))),
+            border_widths: [2.0; 4],
+            border_color: faded(Color::rgb(0.06, 0.12, 0.25)),
+            transform: Turn::IDENTITY,
+            clip: None,
+        });
+        buffer.push(Draw::Text {
+            position: [position[0] + 4.0, position[1] + 8.0],
+            size: 18.0,
+            color: faded(Color::WHITE),
+            text: &numbers[n],
+            font: FontFace::default(),
+            letter_spacing: 0.0,
+            blur: 0.0,
+            transform: Turn::IDENTITY,
+            clip: None,
+        });
+    };
+    // Grouped: a panel of 160 faded as one, then 160 more each faded as
+    // one on its own.
+    let mut grouped = DrawBuffer::default();
+    grouped.push(Draw::Group { opacity: 0.5 });
+    for n in 0..160 {
+        piece(&mut grouped, n, 1.0);
+    }
+    grouped.push(Draw::EndGroup);
+    for n in 160..320 {
+        grouped.push(Draw::Group { opacity: 0.7 });
+        piece(&mut grouped, n, 1.0);
+        grouped.push(Draw::EndGroup);
+    }
+    // Each piece faded by itself, and not faded at all.
+    let mut each_piece = DrawBuffer::default();
+    let mut solid = DrawBuffer::default();
+    for n in 0..320 {
+        piece(&mut each_piece, n, if n < 160 { 0.5 } else { 0.7 });
+        piece(&mut solid, n, 1.0);
+    }
+    let format = vk::Format::R8G8B8A8_SRGB;
+    let frames = 30;
+    let empty = Ui::default();
+    let time = |list: DrawList<'_>| {
+        let lists = vec![list; frames];
+        overlaid_sized(&gpu, format, extent, &lists[..2]);
+        overlaid_sized(&gpu, format, extent, &lists).1.as_secs_f64() * 1000.0 / frames as f64
+    };
+    let bare = time(empty.draw());
+    println!(
+        "a frame with no HUD: {bare:.3} ms; the boxes, solid: {:.3} ms, each piece faded: \
+         {:.3} ms, faded in groups: {:.3} ms",
+        time(solid.draw()) - bare,
+        time(each_piece.draw()) - bare,
+        time(grouped.draw()) - bare,
+    );
     finish(gpu);
 }

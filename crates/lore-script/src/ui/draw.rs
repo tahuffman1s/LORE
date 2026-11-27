@@ -13,11 +13,12 @@
 //! - a shadow is a shadow, a picture is a box filled with the picture (a
 //!   cut-up picture keeps the size of its edges), text is its shadows, as
 //!   blurred text drawn first, then the text itself;
-//! - the opacity the page worked out for each paint multiplies every
-//!   colour's alpha.
+//! - an element that fades is a group, drawn as one picture and faded as a
+//!   whole, so colours are passed on as the page gives them;
+//! - a clip keeps its transform, its moving part scaled.
 
 use lore_markup::{Fill as PageFill, Frame, Paint};
-use lore_ui::{Clip, Color, Draw, DrawBuffer, Fill, FontFace, Stop, TextMeasure, Transform};
+use lore_ui::{Clip, Color, Draw, DrawBuffer, Fill, FontFace, Radii, Stop, TextMeasure, Transform};
 
 use crate::images::HudImageInfo;
 
@@ -45,13 +46,21 @@ pub(crate) struct Mapper<'a> {
     pub unknown: &'a mut dyn FnMut(&str),
 }
 
-/// A colour with the paint's opacity in its alpha.
-fn tinted(color: [f32; 4], opacity: f32) -> Color {
-    Color::rgba(color[0], color[1], color[2], color[3] * opacity)
+/// A colour of the page as the renderer has it.
+fn tinted(color: [f32; 4]) -> Color {
+    Color::rgba(color[0], color[1], color[2], color[3])
 }
 
 fn scaled4(values: [f32; 4], s: f32) -> [f32; 4] {
     values.map(|v| v * s)
+}
+
+/// The page's corners in real pixels, oval ones staying oval.
+fn scaled_radii(radii: lore_markup::Radii, s: f32) -> Radii {
+    Radii {
+        across: scaled4(radii.across, s),
+        down: scaled4(radii.down, s),
+    }
 }
 
 fn transform_of(common: &lore_markup::Common, s: f32) -> Transform {
@@ -62,10 +71,19 @@ fn transform_of(common: &lore_markup::Common, s: f32) -> Transform {
 }
 
 fn clip_of(common: &lore_markup::Common, s: f32) -> Option<Clip> {
-    common.clip.map(|clip| Clip {
-        position: [clip.rect.x * s, clip.rect.y * s],
-        size: [clip.rect.w * s, clip.rect.h * s],
-        radii: scaled4(clip.radii, s),
+    common.clip.map(|clip| {
+        let [a, b, c, d, e, f] = clip.transform;
+        Clip {
+            position: [clip.rect.x * s, clip.rect.y * s],
+            size: [clip.rect.w * s, clip.rect.h * s],
+            radii: scaled_radii(clip.radii, s),
+            transform: Transform {
+                matrix: [a, b, c, d, e * s, f * s],
+            },
+            within: clip
+                .within
+                .map(|within| scaled4([within.x, within.y, within.w, within.h], s)),
+        }
     })
 }
 
@@ -92,8 +110,8 @@ impl Mapper<'_> {
             } => out.push(Draw::Shadow {
                 position: [rect.x * s, rect.y * s],
                 size: [rect.w * s, rect.h * s],
-                radii: scaled4(*radii, s),
-                color: tinted(*color, common.opacity),
+                radii: scaled_radii(*radii, s),
+                color: tinted(*color),
                 offset: [offset[0] * s, offset[1] * s],
                 blur: blur * s,
                 spread: spread * s,
@@ -101,6 +119,8 @@ impl Mapper<'_> {
                 transform: transform_of(common, s),
                 clip: clip_of(common, s),
             }),
+            Paint::Group { opacity } => out.push(Draw::Group { opacity: *opacity }),
+            Paint::EndGroup => out.push(Draw::EndGroup),
             Paint::Rect {
                 rect,
                 radii,
@@ -138,10 +158,10 @@ impl Mapper<'_> {
                 out.push(Draw::Box {
                     position: [rect.x * s, rect.y * s],
                     size: [rect.w * s, rect.h * s],
-                    radii: [0.0; 4],
+                    radii: Radii::SQUARE,
                     fill: Fill::Image {
                         image: u32::try_from(image).unwrap_or(u32::MAX),
-                        tint: tinted([1.0; 4], common.opacity),
+                        tint: tinted([1.0; 4]),
                         slice: slice_edges,
                         slice_scale,
                     },
@@ -183,7 +203,7 @@ impl Mapper<'_> {
                             (origin[1] + shadow.offset[1]) * s - up,
                         ],
                         size: px,
-                        color: tinted(shadow.color, common.opacity),
+                        color: tinted(shadow.color),
                         text,
                         font: face,
                         letter_spacing: letter_spacing * s,
@@ -195,7 +215,7 @@ impl Mapper<'_> {
                 out.push(Draw::Text {
                     position: [origin[0] * s, origin[1] * s - up],
                     size: px,
-                    color: tinted(*color, common.opacity),
+                    color: tinted(*color),
                     text,
                     font: face,
                     letter_spacing: letter_spacing * s,
@@ -210,7 +230,7 @@ impl Mapper<'_> {
     fn rect(
         &mut self,
         frame: &Frame,
-        (rect, radii, fill): (&lore_markup::Rect, &[f32; 4], &PageFill),
+        (rect, radii, fill): (&lore_markup::Rect, &lore_markup::Radii, &PageFill),
         (widths, colors): (&[f32; 4], &[[f32; 4]; 4]),
         common: &lore_markup::Common,
         out: &mut DrawBuffer,
@@ -218,7 +238,7 @@ impl Mapper<'_> {
         let s = self.scale;
         let position = [rect.x * s, rect.y * s];
         let size = [rect.w * s, rect.h * s];
-        let radii = scaled4(*radii, s);
+        let radii = scaled_radii(*radii, s);
         let transform = transform_of(common, s);
         let clip = clip_of(common, s);
         let nothing = Color::rgba(0.0, 0.0, 0.0, 0.0);
@@ -231,9 +251,9 @@ impl Mapper<'_> {
         self.stops.clear();
         let fill = match fill {
             PageFill::None => Fill::Color(nothing),
-            PageFill::Color(color) => Fill::Color(tinted(*color, common.opacity)),
+            PageFill::Color(color) => Fill::Color(tinted(*color)),
             PageFill::Linear { angle_deg, stops } => {
-                self.collect(frame, stops, common.opacity);
+                self.collect(frame, stops);
                 Fill::Linear {
                     angle: *angle_deg,
                     stops: &self.stops[..],
@@ -244,7 +264,7 @@ impl Mapper<'_> {
                 radius,
                 stops,
             } => {
-                self.collect(frame, stops, common.opacity);
+                self.collect(frame, stops);
                 // The page gives pixels; the renderer wants shares of the box.
                 let share = |v: f32, whole: f32| if whole > 0.0 { v / whole } else { 0.0 };
                 Fill::Radial {
@@ -258,7 +278,7 @@ impl Mapper<'_> {
             }
         };
         let (own_widths, own_colour) = if one_colour {
-            (scaled4(*widths, s), tinted(colors[first], common.opacity))
+            (scaled4(*widths, s), tinted(colors[first]))
         } else {
             ([0.0; 4], nothing)
         };
@@ -288,17 +308,17 @@ impl Mapper<'_> {
                 radii,
                 fill: Fill::Color(nothing),
                 border_widths: only,
-                border_color: tinted(colors[side], common.opacity),
+                border_color: tinted(colors[side]),
                 transform,
                 clip,
             });
         }
     }
 
-    fn collect(&mut self, frame: &Frame, range: &std::ops::Range<u32>, opacity: f32) {
+    fn collect(&mut self, frame: &Frame, range: &std::ops::Range<u32>) {
         self.stops
             .extend(frame.stops_of(range).iter().map(|stop| Stop {
-                color: tinted(stop.color, opacity),
+                color: tinted(stop.color),
                 at: stop.offset,
             }));
     }
