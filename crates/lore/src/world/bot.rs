@@ -32,6 +32,10 @@ fn clock(tick: u32, tick_rate: u32) -> String {
     format!("{}:{:02}.{}", tenths / 600, tenths / 10 % 60, tenths % 10)
 }
 
+/// What the bot's story and `game.bot.onStuck` say when a person takes the
+/// controls from it.
+pub const TOOK_OVER: &str = "The bot stopped: a person took the controls";
+
 /// What the bot's story says when it has done every step of its plan.
 pub const FINISHED: &str = "finished the plan";
 
@@ -61,6 +65,17 @@ impl BotLine {
     }
 }
 
+/// Where someone was last in view of the player's eyes, as a player
+/// remembers it: the bot walks to this, not to where they are now.
+#[derive(Debug, Clone, Copy)]
+struct Known {
+    who: CharacterId,
+    feet: [f32; 3],
+    aim: [f32; 3],
+    /// Whether they were down when last in view.
+    down: bool,
+}
+
 /// The bot of a world and what it has done.
 #[derive(Debug)]
 pub(crate) struct BotPlay {
@@ -73,6 +88,8 @@ pub(crate) struct BotPlay {
     /// Whether it drove the controls on the last tick.
     drove: bool,
     story: Vec<BotLine>,
+    /// The one it is after, as last in view.
+    known: Option<Known>,
 }
 
 impl BotPlay {
@@ -84,6 +101,7 @@ impl BotPlay {
             last: Hands::default(),
             drove: false,
             story: Vec::new(),
+            known: None,
         }
     }
 }
@@ -129,6 +147,31 @@ impl World {
         }
     }
 
+    /// Whether the bot has anything left to do or let go of: steps in its
+    /// plan, the controls it held on the last tick, or steps the script
+    /// added (in `onDone`, say) that wait for the next tick.
+    #[must_use]
+    pub fn bot_busy(&self) -> bool {
+        self.bot_playing() || self.bot_drove() || self.game.host().bot_asked()
+    }
+
+    /// A world nobody plays through [`Playing`](super::Playing) has no
+    /// controls for a bot to press: what the script asked of it is dropped,
+    /// with one warning, and `game.bot.playing` is false.
+    pub(super) fn bot_unplayed(&mut self) {
+        if self.bot_wired || !self.game.host().bot_asked() {
+            return;
+        }
+        let host = self.game.host_mut();
+        drop(host.take_bot_asks());
+        host.set_bot_playing(false, 0);
+        log::warn!(
+            "game.bot was given steps, but nothing plays this game: a bot presses the \
+             player's buttons, so it needs a played game (`lore run`, or `lore check --play` \
+             with a game.onCheck). The steps were dropped."
+        );
+    }
+
     /// Whether the bot drove the controls on the newest tick.
     pub(crate) fn bot_drove(&self) -> bool {
         self.bot.as_ref().is_some_and(|play| play.drove)
@@ -162,6 +205,7 @@ impl World {
         controls: &Controls,
         out: &mut InputFrame,
     ) -> bool {
+        self.bot_wired = true;
         let asks = self.game.host_mut().take_bot_asks();
         if !asks.is_empty() {
             let seed = self.bot_seed();
@@ -194,8 +238,18 @@ impl World {
             play.bot.stop();
             play.last = Hands::default();
             play.drove = false;
-            log::info!("A button was pressed: the bot let go of the controls.");
-            self.game.host_mut().set_bot_playing(false, 0);
+            let said = TOOK_OVER;
+            let at = self.player.player.position;
+            let tick = self.tick.saturating_add(1);
+            if let Some(play) = &mut self.bot {
+                play.story.push(BotLine {
+                    tick,
+                    at,
+                    said: said.to_owned(),
+                    stuck: true,
+                });
+            }
+            self.game.host_mut().bot_let_go(said);
             return false;
         }
         let hands = self.bot_hands(view);
@@ -338,18 +392,32 @@ impl World {
             Some(BotTarget::Who(who)) => {
                 let npc = self.npcs.list().iter().find(|npc| npc.who == *who);
                 npc.map(|npc| {
-                    let feet = npc.body.position;
-                    let aim = [feet[0], feet[1] + CHEST, feet[2]];
+                    let real = npc.body.position;
+                    let real_aim = [real[0], real[1] + CHEST, real[2]];
+                    // One ray from the eyes: what a player sees, they know;
+                    // otherwise they know where they last saw them (or,
+                    // before they ever did, where the script sent the bot).
+                    let in_view = in_view(real_aim);
+                    let known = match play.known {
+                        Some(known) if known.who == *who && !in_view => known,
+                        _ => Known {
+                            who: *who,
+                            feet: real,
+                            aim: real_aim,
+                            down: in_view && npc.down,
+                        },
+                    };
+                    play.known = Some(known);
                     let use_said = usable(lore_script::Usable::Npc(*who));
                     Spot {
-                        feet,
-                        aim,
+                        feet: known.feet,
+                        aim: known.aim,
                         moves: true,
-                        in_view: in_view(aim),
+                        in_view,
                         meant: use_said.is_some_and(|(_, meant)| meant),
                         reach: use_said.map_or(0.0, |(thing, _)| thing.reach),
                         hold: use_said.map_or(0.0, |(thing, _)| thing.seconds),
-                        down: npc.down,
+                        down: known.down,
                     }
                 })
             }
@@ -359,6 +427,7 @@ impl World {
             .and_then(thing_spot);
         let arms = host.held_weapon(CharacterId::PLAYER).map(|held| Arms {
             loaded: held.state.magazine,
+            reserve: held.state.reserve,
             reloading: held.state.reload.is_some(),
         });
         let (places, going) = self.npcs.crowd();
@@ -487,6 +556,19 @@ fn stuck_said(host: &lore_script::ScriptHost, step: &lore_script::BotStep, why: 
         Stuck::NeverInView { seconds, .. } => {
             format!("The bot looked for {name} for {seconds} seconds and never had it in view")
         }
+        Stuck::LostSight {
+            seconds,
+            at: [x, y, z],
+        } => format!(
+            "The bot lost sight of {name} at ({x:.1}, {y:.1}, {z:.1}): it walked to where it \
+             last saw them and did not find them in {seconds} seconds. They may have gone \
+             through a door or round a corner; wait for them, or aim the step at a place"
+        ),
+        Stuck::OutOfRounds => format!(
+            "The bot was to attack {name} but the weapon is empty and the player has no rounds \
+             left to reload it: give the player more, such as game.player.reserve = 30, or take \
+             the step out of the plan"
+        ),
         Stuck::CannotBeUsed => format!(
             "The bot could not use {name}: nothing happens when it is used. Give it a use \
              first, such as game.thing(\"{name}\"):onUse(function(thing, who) ... end), or \

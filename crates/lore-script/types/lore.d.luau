@@ -3275,8 +3275,13 @@ declare game: {
 
         --- Attacks an NPC with what the player holds until it is down:
         --- walks near enough to see it, aims, and uses the fire button in
-        --- bursts, reloading when it is empty. Today it fights only with
-        --- what fires (`game.player:giveWeapon`).
+        --- bursts, reloading when it is empty. It knows only what a player
+        --- could: it walks to where the NPC was last in view, and learns
+        --- the NPC is down only while it sees it. When the weapon is empty
+        --- and no rounds are left, it is stuck (give the player rounds, or
+        --- take the step out); so it is when it does not find the NPC
+        --- where it last saw it. Today it fights only with what fires
+        --- (`game.player:giveWeapon`).
         --- How quickly it reacts and how well it aims follow
         --- `game.difficulty`.
         --- Example: game.bot.attack("Bandit")
@@ -3296,8 +3301,10 @@ declare game: {
         playing: boolean,
 
         --- Whether a button the person presses, or a turn of the mouse,
-        --- takes the controls back from the bot and ends its plan. True
-        --- unless set, as a demo that plays itself wants.
+        --- takes the controls back from the bot and ends its plan (the
+        --- `onStuck` functions hear "a person took the controls"). True
+        --- unless the top level of a script sets it, and true again when
+        --- the line is taken out and the script saved.
         --- Example: game.bot.playerTakesOver = false
         playerTakesOver: boolean,
 
@@ -3306,8 +3313,10 @@ declare game: {
         onDone: (handler: () -> ()) -> (),
 
         --- Calls `handler` with why, in a sentence, when the bot cannot do
-        --- a step; the rest of the plan is given up, so give it new steps to
-        --- carry on. With no function, the log says it.
+        --- a step, or when a person takes the controls ("The bot stopped:
+        --- a person took the controls"); the rest of the plan is given up,
+        --- so give it new steps to carry on. With no function, the log
+        --- says it.
         --- Example: game.bot.onStuck(function(why) print(why) end)
         onStuck: (handler: (why: string) -> ()) -> (),
     },

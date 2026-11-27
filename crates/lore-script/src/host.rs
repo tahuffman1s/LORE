@@ -2508,6 +2508,30 @@ impl ScriptHost {
         self.bot.player_takes_over()
     }
 
+    /// Whether the script asked something of the bot that the world has not
+    /// taken yet: steps added in `onDone` or `onStuck` wait here for the
+    /// next tick.
+    #[must_use]
+    pub fn bot_asked(&self) -> bool {
+        self.bot.asked()
+    }
+
+    /// Why the game stands still, in words, for what `lore check --play`
+    /// says when a pause never ends: a screen that pauses, `game.pause()`
+    /// or `game.setTimeSpeed(0)`.
+    #[must_use]
+    pub fn why_still(&self) -> String {
+        if let Some(screen) = self.ui.pausing_screen()
+            && self.clock.is_paused()
+        {
+            format!("the screen \"{screen}\" is showing and has pauses = true")
+        } else if self.clock.is_paused() {
+            "game.pause() was called and game.resume() was not".to_owned()
+        } else {
+            "game.setTimeSpeed(0) was called".to_owned()
+        }
+    }
+
     /// What the script calls what a step of the bot's plan is aimed at.
     #[must_use]
     pub fn bot_target_name(&self, target: &crate::BotTarget) -> String {
@@ -2557,6 +2581,17 @@ impl ScriptHost {
     /// sentence): its `game.bot.onStuck` functions are called with it, or
     /// with none the log says it. The rest of the plan is given up.
     pub fn bot_stuck(&mut self, said: &str) {
+        self.tell_stuck(said, true);
+    }
+
+    /// Tells the script a person took the controls from the bot
+    /// (`game.bot.onStuck`, with `said` as the reason). It is not a
+    /// warning when nothing listens: a person may always do it.
+    pub fn bot_let_go(&mut self, said: &str) {
+        self.tell_stuck(said, false);
+    }
+
+    fn tell_stuck(&mut self, said: &str, warn: bool) {
         self.bot.set_playing(false, 0);
         let Some(version) = &self.running else {
             return;
@@ -2564,9 +2599,16 @@ impl ScriptHost {
         let shared = Rc::clone(&version.shared);
         let handlers = shared.handlers.borrow().bot_stuck.clone();
         if handlers.is_empty() {
-            log::warn!(
-                "{said}. To answer it in the game, write game.bot.onStuck(function(why) ... end)."
-            );
+            // `lore check --play` says it once itself, as the report.
+            if !self.bot.checking() {
+                if warn {
+                    log::warn!(
+                        "{said}. To answer it in the game, write game.bot.onStuck(function(why) ... end)."
+                    );
+                } else {
+                    log::info!("{said}.");
+                }
+            }
             return;
         }
         let Ok(why) = version.vm.create_string(said) else {
@@ -2617,6 +2659,7 @@ impl ScriptHost {
         if handlers.is_empty() {
             return false;
         }
+        self.bot.set_checking(true);
         for handler in handlers {
             if !self.call(&shared, &handler, ()) {
                 break;
@@ -3112,12 +3155,16 @@ impl ScriptHost {
         // The new version names its own steps of difficulty, or has the
         // engine's if it names none.
         let steps = self.difficulty.usual_steps();
+        // `game.bot.playerTakesOver` starts at its default again, unless
+        // the new version's top level says otherwise.
+        let takes_over = self.bot.reset_takes_over();
         // Who likes whom, to put back if the new version fails to load.
         let sides = self.sides.table.borrow().clone();
         if let Err(error) = self.install() {
             self.live_set.live.set(before);
             self.clock.set_paused(was_paused);
             self.difficulty.restore_steps(steps);
+            self.bot.restore_takes_over(takes_over);
             self.sides.table.replace(sides);
             return Err(error);
         }

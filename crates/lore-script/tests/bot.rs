@@ -104,3 +104,23 @@ fn mistakes_say_what_to_write() {
     let message = load_mistake("game.bot.onStuck(\"stop\")");
     assert!(message.contains("needs a function"), "{message}");
 }
+
+#[test]
+fn player_takes_over_goes_back_to_true_when_its_line_is_saved_away() {
+    let folder =
+        std::env::temp_dir().join(format!("lore-script-bot-takes-over-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let main = folder.join(lore_script::ENTRY_SCRIPT);
+    std::fs::write(&main, "game.bot.playerTakesOver = false").unwrap();
+    let mut host = ScriptHost::open(&folder, ActionMap::standard()).unwrap();
+    assert!(!host.bot_yields_to_player());
+    // A save that fails to load leaves it as it was.
+    std::fs::write(&main, "game.bot.playerTakesOver = ").unwrap();
+    assert!(host.reload().is_err());
+    assert!(!host.bot_yields_to_player());
+    // The line taken out: the default again.
+    std::fs::write(&main, "-- no bot here").unwrap();
+    host.reload().unwrap();
+    let _ = std::fs::remove_dir_all(&folder);
+    assert!(host.bot_yields_to_player());
+}

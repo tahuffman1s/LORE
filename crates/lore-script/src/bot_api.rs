@@ -64,6 +64,9 @@ pub(crate) struct BotState {
     waiting: Cell<usize>,
     playing: Cell<bool>,
     takes_over: Cell<bool>,
+    /// Whether `lore check --play` plays the plan: the sentence it ends
+    /// with is told once, in its own report, not also in the log.
+    checking: Cell<bool>,
 }
 
 impl Default for BotState {
@@ -75,6 +78,7 @@ impl Default for BotState {
             // A demo that plays itself stops when a person picks up the
             // controls.
             takes_over: Cell::new(true),
+            checking: Cell::new(false),
         }
     }
 }
@@ -91,6 +95,29 @@ impl BotState {
 
     pub(crate) fn player_takes_over(&self) -> bool {
         self.takes_over.get()
+    }
+
+    /// Whether the script asked for something the world has not taken yet.
+    pub(crate) fn asked(&self) -> bool {
+        !self.asks.borrow().is_empty()
+    }
+
+    /// A new version of the script starts with the default (true), as it
+    /// does with every setting its top level makes; says what it was.
+    pub(crate) fn reset_takes_over(&self) -> bool {
+        self.takes_over.replace(true)
+    }
+
+    pub(crate) fn restore_takes_over(&self, takes_over: bool) {
+        self.takes_over.set(takes_over);
+    }
+
+    pub(crate) fn set_checking(&self, checking: bool) {
+        self.checking.set(checking);
+    }
+
+    pub(crate) fn checking(&self) -> bool {
+        self.checking.get()
     }
 
     fn ask(&self, ask: BotAsk) {

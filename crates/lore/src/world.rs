@@ -41,7 +41,7 @@ mod witness;
 
 pub(crate) use bodies::{Body, Dummy, Standing};
 pub use bodies::{DummyId, PlayerInput};
-pub use bot::{BotLine, FINISHED as BOT_FINISHED};
+pub use bot::{BotLine, FINISHED as BOT_FINISHED, TOOK_OVER as BOT_TOOK_OVER};
 pub(crate) use climate::said as said_weather;
 pub(crate) use ground::Ground;
 pub use ground::{WalkCheck, try_walking};
@@ -132,6 +132,9 @@ pub struct World {
     usable_ids: Vec<using::UseKey>,
     /// The bot, once the script has given it something to do.
     bot: Option<Box<bot::BotPlay>>,
+    /// Whether a [`Playing`] asks the bot for its input each tick; a bare
+    /// world has nobody to press buttons for it.
+    bot_wired: bool,
     /// Whether the fire button was down on the last tick: a throw is a
     /// press, not a hold.
     fire_was: bool,
@@ -320,6 +323,7 @@ impl World {
             usable: Vec::new(),
             usable_ids: Vec::new(),
             bot: None,
+            bot_wired: false,
             fire_was: false,
             ladders,
             dodge: Dodge::default(),
@@ -838,6 +842,7 @@ impl Game for World {
     /// (`game.input`); the player moves by what was asked of them
     /// ([`World::ask`]).
     fn tick(&mut self, input: &InputFrame, step: f32) {
+        self.bot_unplayed();
         // Time stood still: only the script runs, so that it hears the
         // player and can start time again. Nothing in the world moves,
         // and what the last tick made is not made again.
@@ -1630,6 +1635,8 @@ pub struct Playing {
     /// The input of the tick being run, as the bot pressed it, kept so a
     /// tick sets no memory aside.
     bot_frame: InputFrame,
+    /// Whether the newest tick was run from the bot's input.
+    bot_used: bool,
 }
 
 /// How far ahead of its grip a weapon must reach to be held in both hands
@@ -1833,6 +1840,7 @@ impl Playing {
             weapon_lengths: std::collections::HashMap::new(),
             npc_figures: crate::npc_figures::NpcFigures::mannequin(),
             bot_frame: InputFrame::default(),
+            bot_used: false,
         }
         .with_body_said()
     }
@@ -2422,7 +2430,8 @@ impl Game for Playing {
         // from what it pressed, as from a device.
         let mut pressed = std::mem::take(&mut self.bot_frame);
         let view = [self.yaw, self.pitch];
-        if (self.world).bot_frame(input, view, &self.controls, &mut pressed) {
+        self.bot_used = (self.world).bot_frame(input, view, &self.controls, &mut pressed);
+        if self.bot_used {
             self.tick_by(&pressed, step);
         } else {
             self.tick_by(input, step);

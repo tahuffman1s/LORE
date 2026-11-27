@@ -43,8 +43,8 @@ const LOOKING: f32 = 0.02;
 /// How long the bot looks for something before it gives up, in seconds.
 pub const LOOK_FOR: f32 = 5.0;
 
-/// How long the bot hunts for someone to attack who is not in view before
-/// it gives up, in seconds.
+/// How long the bot waits at the place it last saw someone, who is not in
+/// view there, before it gives up, in seconds.
 pub const HUNT_FOR: f32 = 20.0;
 
 /// How long a door it opened is waited for, in seconds: a door takes 0.7
@@ -180,6 +180,8 @@ impl Spot {
 pub struct Arms {
     /// Rounds ready to fire.
     pub loaded: u32,
+    /// Rounds held back to reload with.
+    pub reserve: u32,
     /// Whether a reload is under way.
     pub reloading: bool,
 }
@@ -319,10 +321,21 @@ pub enum Stuck {
         /// Whether it had it in view, but could not use it from there.
         seen: bool,
     },
+    /// It walked to where it last saw someone, and they were not in view
+    /// there for this long.
+    LostSight {
+        /// How long it waited there, in seconds.
+        seconds: f32,
+        /// Where it last saw them.
+        at: [f32; 3],
+    },
     /// It was to use something nobody can use: the game gave it no use.
     CannotBeUsed,
     /// It was to attack, and the player holds nothing to attack with.
     Unarmed,
+    /// It was to attack, and the weapon is empty with no rounds left to
+    /// reload it with.
+    OutOfRounds,
     /// Its target is not in the world.
     Gone,
 }
@@ -359,8 +372,9 @@ struct Doing<T, A> {
     held_until: Option<u32>,
     /// Since when the one attacked has been in view without a break.
     in_view_since: Option<u32>,
-    /// The tick the one attacked was last in view.
-    last_in_view: u32,
+    /// The tick it got to where it last saw the one it is after, and they
+    /// were not in view there: how long it has waited is counted from it.
+    lost_since: Option<u32>,
     /// The trigger is held until this tick, then let go until `rest`.
     fire_until: u32,
     rest: u32,
@@ -432,7 +446,7 @@ impl<T: Clone, A: Copy> Bot<T, A> {
                 seen: false,
                 held_until: None,
                 in_view_since: None,
-                last_in_view: tick,
+                lost_since: None,
                 fire_until: 0,
                 rest: 0,
                 off: [0.0; 2],
@@ -485,7 +499,25 @@ impl<T: Clone, A: Copy> Bot<T, A> {
                         self.walk.go(goal(sight, within));
                     }
                     self.walk.retarget(sight.feet);
-                    self.stride(seen, &mut hands, run)
+                    match self.stride(seen, &mut hands, run) {
+                        // Got to where it last saw someone, and they are
+                        // not in view: it waits for them there a while.
+                        Some(Ok(())) if sight.moves && !sight.in_view => {
+                            match lost(&mut doing, tick, dt, sight) {
+                                Some(stuck) => Some(Err(stuck)),
+                                None => {
+                                    self.walk.go(goal(sight, within));
+                                    None
+                                }
+                            }
+                        }
+                        other => {
+                            if sight.in_view {
+                                doing.lost_since = None;
+                            }
+                            other
+                        }
+                    }
                 }
             },
             Step::LookAt { .. } => match seen.target {
@@ -716,19 +748,13 @@ impl<T: Clone, A: Copy> Bot<T, A> {
         let dt = seen.around.seconds;
         if sight.in_view {
             doing.in_view_since.get_or_insert(tick);
-            doing.last_in_view = tick;
+            doing.lost_since = None;
         } else {
             doing.in_view_since = None;
             doing.fire_until = 0;
         }
         let far = across(seen.body.position, sight.feet);
         if !sight.in_view || far > KEEP_WITHIN {
-            if tick.saturating_sub(doing.last_in_view) > ticks(HUNT_FOR, dt) {
-                return Some(Err(Stuck::NeverInView {
-                    seconds: HUNT_FOR,
-                    seen: false,
-                }));
-            }
             if self.walk.goal().is_none() {
                 self.walk.go(Goal {
                     moves: true,
@@ -736,11 +762,18 @@ impl<T: Clone, A: Copy> Bot<T, A> {
                 });
             }
             self.walk.retarget(sight.feet);
-            // Arriving near them is not news for an attack.
             // It does not shoot while it closes in: the stick goes the way
-            // the view turns as it walks.
-            if let Some(Err(why)) = self.stride(seen, hands, false) {
-                return Some(Err(why));
+            // the view turns as it walks. Arriving near them is not news
+            // for an attack; arriving where it last saw them, and finding
+            // nobody in view, is waited out.
+            match self.stride(seen, hands, false) {
+                Some(Err(why)) => return Some(Err(why)),
+                Some(Ok(())) if !sight.in_view => {
+                    if let Some(stuck) = lost(doing, tick, dt, sight) {
+                        return Some(Err(stuck));
+                    }
+                }
+                _ => {}
             }
             return None;
         } else if self.walk.goal().is_some() {
@@ -751,6 +784,10 @@ impl<T: Clone, A: Copy> Bot<T, A> {
         }
         let gap = self.look_off(seen, hands, sight.aim, doing.off, LOOK_TURN);
         if arms.loaded == 0 {
+            if arms.reserve == 0 && !arms.reloading {
+                // Nothing to reload with: it can never fire again.
+                return Some(Err(Stuck::OutOfRounds));
+            }
             // Empty: a press of reload, unless one is under way.
             hands.reload = !arms.reloading && tick.is_multiple_of(2);
             return None;
@@ -795,6 +832,16 @@ fn goal(sight: Spot, within: f32) -> Goal {
         run: true,
         ..Goal::to(sight.feet, within)
     }
+}
+
+/// Stuck as lost, if it has waited at where it last saw someone for longer
+/// than [`HUNT_FOR`]; the wait starts the first time this is asked.
+fn lost<T, A>(doing: &mut Doing<T, A>, tick: u32, dt: f32, sight: Spot) -> Option<Stuck> {
+    let since = *doing.lost_since.get_or_insert(tick);
+    (tick.saturating_sub(since) > ticks(HUNT_FOR, dt)).then_some(Stuck::LostSight {
+        seconds: HUNT_FOR,
+        at: sight.feet,
+    })
 }
 
 /// Stuck, if it has looked since `since` for longer than [`LOOK_FOR`].
@@ -1051,6 +1098,7 @@ mod tests {
             });
             seen.arms = Some(Arms {
                 loaded: 30,
+                reserve: 0,
                 reloading: false,
             });
             seen.skill = Skill::of_aim(aim);
@@ -1084,6 +1132,7 @@ mod tests {
             seen.target = Some(Spot::place([0.0, 1.3, -6.0]));
             seen.arms = Some(Arms {
                 loaded: 0,
+                reserve: 30,
                 reloading: false,
             });
             let hands = bot.play(&seen);
@@ -1091,6 +1140,91 @@ mod tests {
             reloads += u32::from(hands.reload);
         }
         assert!(reloads > 0);
+    }
+
+    #[test]
+    fn an_empty_weapon_with_nothing_to_reload_with_ends_the_attack_as_stuck() {
+        let place = flat();
+        let body = body_at([0.0; 3]);
+        let mut bot = TestBot::new(3);
+        bot.add(Step::Attack { who: [0.0; 3] });
+        for (tick, reloading) in [(1, true), (2, false)] {
+            let around = around(&place, tick);
+            let mut seen = seen(&around, &body, [0.0; 2]);
+            seen.target = Some(Spot::place([0.0, 1.3, -6.0]));
+            seen.arms = Some(Arms {
+                loaded: 0,
+                reserve: 0,
+                reloading,
+            });
+            bot.play(&seen);
+            // A reload under way may still bring rounds.
+            assert_eq!(bot.playing(), reloading);
+        }
+        assert!(matches!(
+            bot.take_news(),
+            Some(BotNews::Stuck {
+                why: Stuck::OutOfRounds,
+                ..
+            })
+        ));
+        assert!(!bot.playing());
+    }
+
+    #[test]
+    fn someone_not_found_where_they_were_last_seen_ends_the_attack_as_stuck() {
+        let place = flat();
+        let mut body = body_at([0.0; 3]);
+        let rules = MoveSettings::default();
+        let last = [3.0, 0.0, -12.0];
+        let mut bot = TestBot::new(1);
+        bot.add(Step::Attack { who: [0.0; 3] });
+        let mut view = [0.0f32, 0.0];
+        let mut tick = 1;
+        while bot.playing() {
+            if let Some((from, to)) = bot.walk().wants_way(&body) {
+                let found = place.walkable.way(from, to, &place.openings);
+                let found = found.map(|way| *bot.walk_mut().way_mut() = way);
+                bot.walk_mut().found(found, tick, DT);
+            }
+            let around = around(&place, tick);
+            let mut seen = seen(&around, &body, view);
+            seen.target = Some(Spot {
+                feet: last,
+                in_view: false,
+                moves: true,
+                ..Spot::place([last[0], 1.3, last[2]])
+            });
+            seen.arms = Some(Arms {
+                loaded: 30,
+                reserve: 30,
+                reloading: false,
+            });
+            let hands = bot.play(&seen);
+            view = [
+                (view[0] - hands.turn[0]).rem_euclid(std::f32::consts::TAU),
+                view[1] + hands.turn[1],
+            ];
+            let asked = lore_physics::MoveInput {
+                forward: hands.walk[1],
+                right: hands.walk[0],
+                yaw: view[0],
+                ..Default::default()
+            };
+            assert!(!hands.fire);
+            body.step(&place.level, &rules, &asked, DT);
+            tick += 1;
+            assert!(tick < 60 * 60, "{:?}", body.position);
+        }
+        // It walked to the place, then waited there.
+        assert!(across(body.position, last) < CLOSE_TO + 0.5);
+        match bot.take_news() {
+            Some(BotNews::Stuck {
+                why: Stuck::LostSight { at, seconds },
+                ..
+            }) => assert!(at == last && seconds == HUNT_FOR),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

@@ -664,6 +664,11 @@ fn scripts_in(
 /// The longest `lore check --play` plays a plan, in seconds of game time.
 pub const PLAY_SECONDS: u32 = 10 * 60;
 
+/// How long the game may stand still in a row while `lore check --play`
+/// plays, in seconds of game time: nobody is there to press the button
+/// that would let it go on.
+pub const STILL_SECONDS: u32 = 5;
+
 /// `lore check --play`: plays `game` on `level` for real, with no window
 /// and as fast as it will go, while the bot plays the plan `game.onCheck`
 /// gives it. Says what the bot did as it does it, and fails, saying why,
@@ -711,19 +716,36 @@ pub fn play_plan(
     while ticks < most {
         playing.tick(input.tick(), step);
         ticks += 1;
-        if playing.world().game().host().time_speed() == 0.0 {
-            still += 1;
+        let host = playing.world().game().host();
+        still = if host.time_speed() == 0.0 {
+            still + 1
+        } else {
+            0
+        };
+        if still > STILL_SECONDS.saturating_mul(rate) {
+            let [x, y, z] = playing.world().player().position;
+            return Err(format!(
+                "The game stood still for {STILL_SECONDS} seconds in a row at ({x:.1}, {y:.1}, \
+                 {z:.1}): {}. `lore check --play` has nobody to press a button, so it could \
+                 never go on. Make the plan press it, such as game.bot.press(\"...\"), or \
+                 close it in game.onCheck, for example title:hide().",
+                host.why_still()
+            ));
         }
+        // What the bot could not do is said once, in the report below.
         let story = playing.world().bot_story();
         for line in story.get(told..).unwrap_or_default() {
-            println!("  {}", line.written(rate));
+            if !line.stuck {
+                println!("  {}", line.written(rate));
+            }
         }
         told = story.len();
         if let Some(mistake) = mistake(&playing) {
             return Err(mistake);
         }
-        let world = playing.world();
-        if !world.bot_playing() && !world.bot_drove() {
+        // Steps a script adds as the plan ends (in onDone) wait for the
+        // next tick: the plan is not over while they do.
+        if !playing.world().bot_busy() {
             break;
         }
     }
@@ -736,14 +758,7 @@ pub fn play_plan(
              (in {took:.1} s). Change the level or the plan, then run `lore check --play` again.",
             line.said
         )),
-        None if still + 1 >= ticks => Err(
-            "The game stood still the whole time (it was paused, or a screen with pauses = true, \
-             such as a title screen, was showing), so the bot never played: it plays only while \
-             the game runs. In game.onCheck, close what holds the game first, for example \
-             title:hide()."
-                .to_owned(),
-        ),
-        _ if world.bot_playing() => {
+        _ if world.bot_busy() => {
             let [x, y, z] = world.player().position;
             Err(format!(
                 "The plan was not done after {} minutes of game time; the player stood at \

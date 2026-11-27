@@ -76,8 +76,8 @@ struct Played {
     feet: Vec<[f32; 3]>,
 }
 
-/// Plays `game` until the bot has nothing left to do (and a tick more to
-/// let go), or `most` ticks.
+/// Plays `game` until the bot has nothing left to do (steps the script
+/// adds in `onDone` count), or `most` ticks.
 fn play(game: &mut Playing, most: u32) -> Played {
     let still = idle();
     let mut played = Played {
@@ -86,13 +86,15 @@ fn play(game: &mut Playing, most: u32) -> Played {
     };
     for _ in 0..most {
         game.tick(&still, STEP);
-        played.frames.push(if game.world.bot_drove() {
+        // The input the tick was really run from: the bot's, including the
+        // frame on which it let go.
+        played.frames.push(if game.bot_used {
             game.bot_frame.clone()
         } else {
             still.clone()
         });
         played.feet.push(game.world.player().position);
-        if !game.world.bot_playing() && !game.world.bot_drove() && played.feet.len() > 1 {
+        if !game.world.bot_busy() && played.feet.len() > 1 {
             break;
         }
     }
@@ -134,6 +136,102 @@ fn the_bot_walks_to_the_lookout_by_pressing_buttons_alone() {
         again.tick(frame, STEP);
         assert!(!again.world.bot_drove());
         assert_eq!(again.world.player().position, *feet, "tick {tick}");
+    }
+}
+
+/// The rules of a game with a lever, a bandit to shoot and a house door,
+/// and the plan that uses all of them.
+const RULES: &str = r#"
+    local bandit = game.npc { name = "Bandit", at = vector.create(0, 0, 2) }
+    game.onSpawn(function() game.player:giveWeapon("rifle") end)
+    game.thing("Lever"):onUse(function(lever, who) print(who.name .. " pulled " .. lever.name) end)
+"#;
+const PLAN: &str = r#"
+    game.onStart(function()
+        game.bot.use("Lever")
+        game.bot.attack(bandit)
+        game.bot.goTo("Hearth")
+    end)
+"#;
+
+/// Everything the plan changes, as bits: where the player is and looks,
+/// whether the door is open, how much health each NPC has and what the
+/// scripts printed.
+fn world_state(game: &Playing) -> Vec<u32> {
+    let world = &game.world;
+    let mut state: Vec<u32> = world.player().position.map(f32::to_bits).to_vec();
+    state.extend([game.yaw.to_bits(), game.pitch.to_bits()]);
+    state.push(u32::from(world.things.door("door") == Some(true)));
+    for npc in world.npcs.list() {
+        let (health, _) = world.game().host().health(npc.who).unwrap_or_default();
+        state.extend([health.to_bits(), u32::from(npc.down)]);
+    }
+    state.push(printed(world).len() as u32);
+    state
+}
+
+#[test]
+fn a_plan_that_opens_a_door_uses_a_thing_and_attacks_replays_with_no_bot() {
+    let mut game = playing(&format!("{RULES}{PLAN}"));
+    let mut states = Vec::new();
+    let still = idle();
+    let mut frames = Vec::new();
+    for _ in 0..60 * 90 {
+        game.tick(&still, STEP);
+        frames.push(if game.bot_used {
+            game.bot_frame.clone()
+        } else {
+            still.clone()
+        });
+        states.push(world_state(&game));
+        if !game.world.bot_busy() {
+            break;
+        }
+    }
+    assert_eq!(
+        story(&game),
+        [
+            "used Lever",
+            "brought down Bandit",
+            "got to Hearth",
+            "finished the plan"
+        ]
+    );
+    // It did all three: the door is open, the bandit is down, the lever
+    // was pulled.
+    let last = states.last().unwrap();
+    assert_eq!(last[5], 1, "door");
+    assert_eq!(
+        game.world.npcs.list().iter().filter(|npc| npc.down).count(),
+        1
+    );
+    assert_eq!(printed(&game.world), ["Player pulled Lever"]);
+
+    // The same input with no bot plays the same game, tick for tick.
+    let mut again = playing(RULES);
+    for (tick, (frame, state)) in frames.iter().zip(&states).enumerate() {
+        again.tick(frame, STEP);
+        assert!(!again.world.bot_drove());
+        assert_eq!(&world_state(&again), state, "tick {tick}");
+    }
+}
+
+#[test]
+fn a_bots_play_is_the_same_game_at_any_frame_rate() {
+    use crate::playback::{TICK_RATE, first_difference, paces, play, recording, steady};
+    let game_at = |frame_times: Box<dyn Iterator<Item = std::time::Duration>>| {
+        let mut game = playing(&format!("{RULES}{PLAN}"));
+        let played = play(&mut game, &recording(60 * 20), frame_times, world_state);
+        played.states
+    };
+    let expected = game_at(Box::new(steady(TICK_RATE)));
+    // The plan did something worth comparing: it moved and shot.
+    assert_ne!(expected[0], expected[expected.len() - 1]);
+    for (pace, frame_times) in paces() {
+        let found = game_at(frame_times);
+        if let Some(difference) = first_difference(&expected, &found) {
+            panic!("At {pace}, {difference}");
+        }
     }
 }
 
@@ -310,4 +408,175 @@ fn a_check_plays_the_plan_and_fails_when_it_does_not_finish() {
     );
     let none = check_plays("").unwrap_err();
     assert!(none.contains("game.onCheck(function()"), "{none}");
+}
+
+#[test]
+fn an_empty_weapon_with_nothing_to_reload_ends_the_attack_and_the_bot_lets_go() {
+    let mut game = playing(
+        r#"
+        game.weapon("rifle", { magazineSize = 1, reserve = 0, damage = 1 })
+        local bandit = game.npc { name = "Bandit", at = vector.create(0, 0, 2) }
+        game.onSpawn(function() game.player:giveWeapon("rifle") end)
+        game.onStart(function() game.bot.attack(bandit) end)
+        game.bot.onStuck(function(why) print(why) end)
+        "#,
+    );
+    play(&mut game, 60 * 60);
+    let said = printed(&game.world);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with(
+            "The bot was to attack Bandit but the weapon is empty and the player has no rounds left"
+        ),
+        "{said:?}"
+    );
+    assert!(!game.world.bot_playing() && !game.world.bot_busy());
+}
+
+#[test]
+fn steps_added_when_a_plan_ends_are_played_too() {
+    let mut one = playing(
+        r#"
+        local more = true
+        game.onStart(function() game.bot.goTo("Lever") end)
+        game.bot.onDone(function()
+            if more then more = false game.bot.goTo("Hearth") end
+        end)
+        "#,
+    );
+    play(&mut one, 60 * 60);
+    assert_eq!(
+        story(&one),
+        [
+            "got to Lever",
+            "finished the plan",
+            "got to Hearth",
+            "finished the plan"
+        ]
+    );
+}
+
+#[test]
+fn a_person_taking_the_controls_tells_onstuck_why() {
+    let mut game = playing(
+        r#"
+        game.onStart(function() game.bot.goTo("Lookout") end)
+        game.bot.onStuck(function(why) print(why) end)
+        "#,
+    );
+    let still = idle();
+    for _ in 0..30 {
+        game.tick(&still, STEP);
+    }
+    let mut input = Input::new(ActionMap::standard());
+    input.press(lore_input::Key::Space);
+    game.tick(input.tick(), STEP);
+    assert_eq!(
+        printed(&game.world),
+        ["The bot stopped: a person took the controls"]
+    );
+    assert!(game.world.bot_story().last().unwrap().stuck);
+}
+
+#[test]
+fn the_bot_aims_at_where_someone_was_last_seen_not_through_a_wall() {
+    // The bandit is seen at first, then goes into the house: the bot walks
+    // to where it last saw it, not to where it is, and gives up there.
+    let mut game = playing(
+        r#"
+        game.weapon("rifle", { damage = 0.001 })
+        local bandit = game.npc { name = "Bandit", at = vector.create(0, 0, 2) }
+        game.onStart(function() bandit:goTo("Hearth", { run = true }) end)
+        game.onSpawn(function() game.player:giveWeapon("rifle") end)
+        game.onStart(function() game.bot.attack(bandit) end)
+        game.bot.onStuck(function(why) print(why) end)
+        "#,
+    );
+    play(&mut game, 60 * 60);
+    let said = printed(&game.world);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with("The bot lost sight of Bandit at ("),
+        "{said:?}"
+    );
+}
+
+/// What `lore check --play` printed to the log as warnings: the stuck
+/// sentence must not be told there too.
+#[test]
+fn a_check_says_a_stuck_sentence_once_and_plays_a_plan_that_chains_steps() {
+    // Walking to the lever works; the step chained in onDone is behind a
+    // locked door: the check must fail with the door's sentence, even
+    // though the first plan ended on the tick that step was added.
+    let chained = |door: &str| {
+        format!(
+            r#"
+            {door}
+            local more = true
+            game.onCheck(function() game.bot.goTo("Lever") end)
+            game.bot.onDone(function()
+                if more then more = false game.bot.goTo("Hearth") end
+            end)
+            "#
+        )
+    };
+    let stuck = check_plays(&chained(r#"game.thing("House door").usable = false"#)).unwrap_err();
+    assert!(
+        stuck.starts_with(
+            "The plan did not finish: The bot could not reach Hearth: the door \"House door\" is locked"
+        ),
+        "{stuck}"
+    );
+    // The sentence is in the report, and not also in the log.
+    assert!(
+        !warned().iter().any(|line| line.contains("could not reach")),
+        "{:?}",
+        warned()
+    );
+    check_plays(&chained("")).unwrap();
+}
+
+#[test]
+fn a_check_whose_game_stays_paused_says_what_paused_it() {
+    let said = check_plays(
+        r#"
+        game.onCheck(function()
+            game.bot.goTo("Lever")
+            game.bot.goTo("Hearth")
+            game.pause()
+        end)
+        "#,
+    )
+    .unwrap_err();
+    assert!(
+        said.contains("stood still for")
+            && said.contains("game.pause()")
+            && said.contains("game.bot.press"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_bare_world_drops_the_bots_steps_with_one_warning() {
+    use crate::game::Game;
+    capture();
+    let actions = ActionMap::standard();
+    let script = ScriptGame::from_source(
+        "game.onStart(function() game.bot.goTo(vector.create(1, 0, 1)) end)",
+        &actions,
+    );
+    let mut world = crate::world::World::new(script, 60);
+    for _ in 0..3 {
+        world.tick(&idle(), STEP);
+    }
+    assert!(!world.bot_playing());
+    let warnings = warned();
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|line| line.contains("needs a played game"))
+            .count(),
+        1,
+        "{warnings:?}"
+    );
 }
