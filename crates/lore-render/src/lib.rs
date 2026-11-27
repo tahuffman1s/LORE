@@ -57,6 +57,7 @@ mod swapchain;
 mod texture;
 mod tonemap;
 mod tracks;
+mod ui_layers;
 mod ui_pass;
 mod upscale;
 mod view;

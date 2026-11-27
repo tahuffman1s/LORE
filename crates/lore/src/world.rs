@@ -27,6 +27,8 @@ mod climate;
 mod fluids;
 mod ground;
 mod noticing;
+#[cfg(test)]
+mod npc_walks;
 mod npcs;
 mod sensing;
 mod spawn;
@@ -85,6 +87,9 @@ pub struct World {
     shooting: Shooting,
     /// When the player's feet come down.
     walking: Walking,
+    /// Who each solid thing caught this tick, if anyone: kept from tick
+    /// to tick so a tick sets no memory aside.
+    caught: Vec<Option<CharacterId>>,
     /// The noises the player made in the newest tick.
     noises: Vec<Noise>,
     /// The sound and weapon names those noises carry by id.
@@ -274,8 +279,8 @@ impl World {
         let mut next_target = 1;
         let npcs = npcs::Npcs::of(
             game.host_mut(),
-            &ground.level,
-            &ground.rules,
+            (&ground.level, &ground.rules),
+            player.position,
             &mut next_target,
         );
         npcs.tell(game.host_mut());
@@ -293,6 +298,7 @@ impl World {
             tick: 0,
             shooting: Shooting::default(),
             walking: Walking::default(),
+            caught: Vec::new(),
             noises: Vec::new(),
             names: crate::noise::Names::default(),
             marks: Vec::new(),
@@ -404,6 +410,8 @@ impl World {
         // What a script made of how the player moves is not the level's.
         ground.rules = self.ground.rules;
         self.ground = ground;
+        // Ways found on the old ground, and its door numbers, mean nothing.
+        self.npcs.level_changed();
         // Solid things stand on the new shapes, back where the map has them.
         self.things = Self::things_of(&self.game, &self.ground);
         self.ground.walk_round(&self.things);
@@ -846,8 +854,8 @@ impl Game for World {
         // The NPCs the script made, moved or took out in its last tick.
         (self.npcs).hear(
             self.game.host_mut(),
-            &self.ground.level,
-            &self.ground.rules,
+            (&self.ground.level, &self.ground.rules),
+            self.player.player.position,
             &mut self.next_target,
         );
         // The weather moves on: what falls on the player raises the water
@@ -1053,8 +1061,12 @@ impl Game for World {
             ground: &self.ground,
             tick: self.tick,
             player: player.position,
+            things: &self.things,
         };
         (self.npcs).step(self.game.host(), &this_tick, *tick);
+        // A shut door an NPC stands before is opened for it, as the
+        // player's use opens one.
+        (self.npcs).open_doors(&mut self.things, self.game.host_mut(), self.tick, *tick);
         // Whoever the view was held on lets go of it once they are down.
         let host = self.game.host_mut();
         if let Some(locked) = host.locked_on()
@@ -1083,21 +1095,35 @@ impl Game for World {
         // whether something sliding has them caught against a wall: it
         // goes back a tick and waits for them.
         self.standing_on = None;
-        let mut caught = None;
+        // Who each thing has caught, the player first, then the NPCs in
+        // the order of their ids: in a list kept from tick to tick.
+        self.caught.clear();
+        self.caught.resize(self.things.len(), None);
         if walking && !self.things.is_empty() {
-            let (things, standing_on) = (&self.things, &mut self.standing_on);
+            let (things, standing_on, caught) =
+                (&self.things, &mut self.standing_on, &mut self.caught);
             player.touching(level, rules, 0.08, |body, toward, apart| {
                 if toward[1] < -0.7 {
                     *standing_on = Some(body);
-                } else if apart < -things::CAUGHT && things.sliding(body) {
-                    caught = Some(body);
+                } else if apart < -things::CAUGHT
+                    && things.sliding(body)
+                    && let Some(slot) = caught.get_mut(body)
+                {
+                    *slot = Some(CharacterId::PLAYER);
                 }
             });
         }
-        let mut blocked: Option<String> = None;
+        // A door or a lift swinging into an NPC waits for them as it
+        // waits for the player.
+        if self.things.any_sliding() {
+            (self.npcs).caught_by(&self.things, level, &npc_rules, (&mut self.caught, *tick));
+        }
+        let mut blocked: Vec<(String, CharacterId)> = Vec::new();
         for body in 0..self.things.len() {
-            if caught == Some(body) {
-                blocked = self.things.caught_in(body, *tick).map(str::to_owned);
+            if let Some(who) = self.caught.get(body).copied().flatten() {
+                if let Some(id) = self.things.caught_in(body, *tick) {
+                    blocked.push((id.to_owned(), who));
+                }
             } else {
                 self.things.clear_of(body);
             }
@@ -1107,6 +1133,8 @@ impl Game for World {
         let host = self.game.host_mut();
         host.set_position(CharacterId::PLAYER, player.position);
         self.npcs.tell(host);
+        // Who got where they were walking, and who cannot.
+        self.npcs.tell_news(host);
         // Who can be shot and struck this tick: the dummies and the NPCs
         // on their feet.
         self.standing.clear();
@@ -1117,8 +1145,8 @@ impl Game for World {
         for id in &slid.arrived {
             host.thing_arrived(id);
         }
-        if let Some(id) = &blocked {
-            host.thing_blocked(id, CharacterId::PLAYER);
+        for (id, who) in &blocked {
+            host.thing_blocked(id, *who);
         }
         // And where every solid thing has got to.
         if !self.things.is_empty() {
@@ -1294,6 +1322,8 @@ impl Game for World {
             }
             footfall.pitch = pitch;
         }
+        // The NPCs' steps, each heard from where it was made.
+        (self.npcs).footsteps(self.tick, *tick, &mut self.noises);
         // Fluid that came down in this tick is heard from where it did.
         for fall in self.fluids.falls() {
             let kind = if fall.into_pool {
@@ -3182,7 +3212,9 @@ mod tests {
                     Draw::Rect { .. }
                     | Draw::Turned { .. }
                     | Draw::Box { .. }
-                    | Draw::Shadow { .. } => None,
+                    | Draw::Shadow { .. }
+                    | Draw::Group { .. }
+                    | Draw::EndGroup => None,
                 })
                 .collect()
         };
@@ -3405,7 +3437,9 @@ mod tests {
                     Draw::Rect { .. }
                     | Draw::Turned { .. }
                     | Draw::Box { .. }
-                    | Draw::Shadow { .. } => None,
+                    | Draw::Shadow { .. }
+                    | Draw::Group { .. }
+                    | Draw::EndGroup => None,
                 })
                 .collect()
         }
@@ -3642,7 +3676,9 @@ mod tests {
                     Draw::Rect { .. }
                     | Draw::Turned { .. }
                     | Draw::Box { .. }
-                    | Draw::Shadow { .. } => None,
+                    | Draw::Shadow { .. }
+                    | Draw::Group { .. }
+                    | Draw::EndGroup => None,
                 })
                 .collect()
         }

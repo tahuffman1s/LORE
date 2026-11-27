@@ -87,7 +87,7 @@ pub use character_api::CharacterId;
 pub use clock_api::WorldClock;
 pub use dice_api::{Dice, seed_new_games};
 pub use difficulty_api::{DIFFICULTY_SETTING, DifficultyScales};
-pub use error::{OpenError, ScriptError};
+pub use error::{OpenError, ScriptError, closest};
 pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS, PoolTold};
 pub use fonts::{
     FONTS_FOLDER, families_of as font_families_of, family_of as font_family_of, is_font_file,
@@ -102,7 +102,9 @@ pub use lighting_api::{EyeSaid, OcclusionSaid};
 pub use listen_api::BindingAsk;
 pub use look_api::{LookSaid, ToneMappingSaid};
 pub use lore_weapons as weapons;
-pub use npc_api::{AwareAsk, DEFAULT_LOOK_DISTANCE, NPC_KIND, NpcAsk, NpcSenses, NpcTold};
+pub use npc_api::{
+    AwareAsk, DEFAULT_LOOK_DISTANCE, NPC_KIND, NpcAsk, NpcSenses, NpcTold, Toward, WalkAsk,
+};
 pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use shader_api::{
     MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderSaid, ShaderUse,

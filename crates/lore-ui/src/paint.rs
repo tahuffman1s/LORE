@@ -1,7 +1,7 @@
 //! Turning placed widgets into boxes and text.
 
 use crate::draw::Painter;
-use crate::fill::{Clip, Fill, Stop, Transform};
+use crate::fill::{Clip, Fill, Radii, Stop, Transform};
 use crate::hud_style::{HudStyle, MOST_STOPS};
 use crate::layout::{slider_track, tab_width, text_size};
 use crate::node::{Kind, Node, Rect};
@@ -15,14 +15,6 @@ pub(crate) struct Look {
     pub selected: bool,
     /// It gets the gamepad and keyboard outline.
     pub outlined: bool,
-}
-
-/// `color` as solid as `opacity` leaves it.
-fn faded(color: Color, opacity: f32) -> Color {
-    Color {
-        a: color.a * opacity,
-        ..color
-    }
 }
 
 /// How the style moves a piece whose box is `rect`: scaled and turned about
@@ -56,17 +48,13 @@ fn fitted(radii: [f32; 4], w: f32, h: f32) -> [f32; 4] {
 }
 
 /// Where the piece `style` is cut to is on the screen now: its box, moved
-/// by its own scale and turn, and rounded as it is. A turned piece cuts to
-/// the straight box round it. A piece that is hidden cuts everything off.
+/// by its own scale and turn, and rounded as it is. A piece that is hidden
+/// cuts everything off.
 fn clip_of(style: &HudStyle, nodes: &[Node]) -> Option<Clip> {
     let target = nodes.get(style.clip?.0 as usize)?;
     let rect = target.rect;
     if !target.visible {
-        return Some(Clip {
-            position: [rect.x, rect.y],
-            size: [0.0; 2],
-            radii: [0.0; 4],
-        });
+        return Some(Clip::new([rect.x, rect.y], [0.0; 2], Radii::SQUARE));
     }
     let own = target.style.as_deref();
     let angle = match target.kind {
@@ -77,36 +65,39 @@ fn clip_of(style: &HudStyle, nodes: &[Node]) -> Option<Clip> {
         || transform_of(&HudStyle::default(), rect, angle),
         |own| transform_of(own, rect, angle),
     );
-    let corners = [
-        [rect.x, rect.y],
-        [rect.right(), rect.y],
-        [rect.right(), rect.bottom()],
-        [rect.x, rect.bottom()],
-    ]
-    .map(|corner| transform.apply(corner));
-    let (mut low, mut high) = (corners[0], corners[0]);
-    for corner in corners {
-        low = [low[0].min(corner[0]), low[1].min(corner[1])];
-        high = [high[0].max(corner[0]), high[1].max(corner[1])];
-    }
-    let size = [high[0] - low[0], high[1] - low[1]];
-    let scale = own.map_or(1.0, |own| own.scale);
-    let radii = own
-        .map_or([0.0; 4], |own| own.radii)
-        .map(|radius| radius * scale);
+    let radii = own.map_or([0.0; 4], |own| own.radii);
     Some(Clip {
-        position: low,
-        size,
-        radii: fitted(radii, size[0], size[1]),
+        transform,
+        ..Clip::new(
+            [rect.x, rect.y],
+            [rect.w, rect.h],
+            fitted(radii, rect.w, rect.h).into(),
+        )
     })
 }
 
 /// A piece of the HUD, drawn the plain way when its style asks for nothing
 /// the plain way cannot do, else with the styled boxes and text.
 pub(crate) fn hud(node: &Node, nodes: &[Node], theme: &Theme, painter: &mut Painter<'_>) {
-    let rect = node.rect;
     let style = node.style.as_deref();
     let plain = style.is_none_or(HudStyle::is_plain);
+    // A piece that fades is drawn as one picture, so its shadow, fill,
+    // border and text do not show through each other.
+    let opacity = style.map_or(1.0, |style| style.opacity);
+    let grouped = opacity < 1.0 || opacity.is_nan();
+    if grouped {
+        painter.group(opacity);
+    }
+    hud_piece(node, nodes, theme, painter, plain);
+    if grouped {
+        painter.end_group();
+    }
+}
+
+/// What [`hud`] draws, inside the group when the piece fades.
+fn hud_piece(node: &Node, nodes: &[Node], theme: &Theme, painter: &mut Painter<'_>, plain: bool) {
+    let rect = node.rect;
+    let style = node.style.as_deref();
     match &node.kind {
         Kind::HudText { size, color, .. } => {
             let moved = style.is_some_and(HudStyle::is_moved);
@@ -123,11 +114,10 @@ pub(crate) fn hud(node: &Node, nodes: &[Node], theme: &Theme, painter: &mut Pain
             Some(style) if !plain || style.is_moved() => {
                 let transform = transform_of(style, rect, 0.0);
                 let clip = clip_of(style, nodes);
-                let opacity = style.opacity;
                 painter.styled_box(
                     rect,
                     [0.0; 4],
-                    Fill::Color(faded(theme.track, opacity)),
+                    Fill::Color(theme.track),
                     [0.0; 4],
                     Color::BLACK,
                     transform,
@@ -139,7 +129,7 @@ pub(crate) fn hud(node: &Node, nodes: &[Node], theme: &Theme, painter: &mut Pain
                         ..rect
                     },
                     [0.0; 4],
-                    Fill::Color(faded(*color, opacity)),
+                    Fill::Color(*color),
                     [0.0; 4],
                     Color::BLACK,
                     transform,
@@ -217,7 +207,6 @@ fn styled_box(
     painter: &mut Painter<'_>,
 ) {
     let rect = node.rect;
-    let opacity = style.opacity;
     let transform = transform_of(style, rect, angle);
     let clip = clip_of(style, nodes);
     let radii = fitted(style.radii, rect.w, rect.h);
@@ -225,7 +214,7 @@ fn styled_box(
         painter.shadow(
             rect,
             radii,
-            faded(shadow.color, opacity),
+            shadow.color,
             [shadow.right, shadow.down],
             shadow.blur,
             shadow.spread,
@@ -246,7 +235,7 @@ fn styled_box(
     let fill = match (picture, &style.gradient) {
         (Some(image), _) => Fill::Image {
             image,
-            tint: faded(color, opacity),
+            tint: color,
             slice: style.slice,
             slice_scale: painter.scale,
         },
@@ -254,7 +243,7 @@ fn styled_box(
             let count = gradient.stops().len();
             for (kept, stop) in stops.iter_mut().zip(gradient.stops()) {
                 *kept = Stop {
-                    color: faded(stop.color, opacity),
+                    color: stop.color,
                     at: stop.at,
                 };
             }
@@ -276,14 +265,14 @@ fn styled_box(
                 }
             }
         }
-        (None, None) => Fill::Color(faded(color, opacity)),
+        (None, None) => Fill::Color(color),
     };
     painter.styled_box(
         rect,
         radii,
         fill,
         style.border_widths,
-        faded(style.border_color, opacity),
+        style.border_color,
         transform,
         clip,
     );
@@ -291,7 +280,7 @@ fn styled_box(
         painter.shadow(
             rect,
             radii,
-            faded(shadow.color, opacity),
+            shadow.color,
             [shadow.right, shadow.down],
             shadow.blur,
             shadow.spread,
@@ -319,7 +308,7 @@ fn styled_text(
         painter.styled_text(
             [rect.x + shadow.right, rect.y + shadow.down],
             size,
-            faded(shadow.color, style.opacity),
+            shadow.color,
             &node.text,
             style.font,
             style.letter_spacing,
@@ -331,7 +320,7 @@ fn styled_text(
     painter.styled_text(
         [rect.x, rect.y],
         size,
-        faded(color, style.opacity),
+        color,
         &node.text,
         style.font,
         style.letter_spacing,

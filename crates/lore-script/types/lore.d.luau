@@ -748,8 +748,11 @@ declare extern type Thing with
     --- Whether the player can use the thing now: true once it has an
     --- `onUse` function. Set it to false to switch the thing off (a lever
     --- already pulled) and to true to switch it on again. A thing with no
-    --- `onUse` function is never usable.
+    --- `onUse` function is never usable, except a door, which opens and
+    --- shuts when used. A door set to false is locked: neither the player
+    --- nor an NPC walking somewhere opens it.
     --- Example: lever:onUse(function() lever.usable = false end)
+    --- Example: game.thing("Cellar door").usable = false
     usable: boolean
 
     --- Calls `handler` each time the player uses the thing: they look at
@@ -759,10 +762,12 @@ declare extern type Thing with
     --- engine finds which thing the player means, shows `useText` beside
     --- the key or button, and calls the function, in the game's tick like
     --- every other rule. Each call adds another function; all are called.
-    --- `lore check` uses every usable thing once.
+    --- `lore check` uses every usable thing once. `who` is who used it:
+    --- `game.player`, or an NPC opening a door on its way somewhere.
     --- Example: door:onUse(function() print("It creaks open.") end)
+    --- Example: door:onUse(function(door, who) print(who.name .. " opened the door") end)
     --- Example: for _, chest in game.things("chest") do chest.useText = "Open" chest:onUse(function(used) print(used.name) end) end
-    function onUse(self, handler: (thing: Thing) -> ()): ()
+    function onUse(self, handler: (thing: Thing, who: Character) -> ()): ()
 
     --- A property the thing was given in the map (in `lore edit`, or under
     --- the thing's `properties` in map.toml): text, a number, true or
@@ -928,6 +933,69 @@ declare extern type Npc extends Character with
     --- `lore check` uses every usable NPC once.
     --- Example: guard:onUse(function() print("Halt! Who goes there?") end)
     function onUse(self, handler: (npc: Npc) -> ()): ()
+
+    --- Where the NPC is walking: what `goTo` or `follow` was given (a
+    --- place's name, a position, a thing or someone), until it gets
+    --- there, is stopped or cannot get there. nil while it stands. Only
+    --- read: send it with `goTo`.
+    --- Example: if guard.destination == nil then guard:goTo("Gate") end
+    destination: (string | vector | Thing | Character)?
+
+    --- Walks the NPC to a place, and returns at once: the name of anything
+    --- placed in the map, a position, a thing, or someone (it walks up to
+    --- them, wherever they go, and faces them). It finds its way round
+    --- walls and corners, opens doors on the way as the player does (a door
+    --- the script locked with `usable = false` it does not), crouches where
+    --- there is no room to stand, and steps round people. It walks with the
+    --- player's own legs, so it goes only where the player could. It
+    --- walks at 1.4 m/s; `run = true` runs at 4.5; `within` is how close is there, in metres (0.5 for a
+    --- place, 1.5 for someone); `facing` turns it on arriving (degrees left,
+    --- as the map writes them; at a marker of type "place" it faces the way
+    --- the marker does). A new `goTo` or `follow` takes the place of the
+    --- last. Sending the same `goTo` again (every tick, say) changes
+    --- nothing; sent again to a place it just could not reach, it stops at
+    --- once and `onCannotReach` is not called a second time. On an NPC
+    --- that is down (health 0) `goTo` and `follow` are an error: give it
+    --- health first (`setHealth`). `onArrive` hears it get there, `onCannotReach` why it cannot,
+    --- both in the game's tick. A walk under way goes on when the script is
+    --- saved and loads again.
+    --- Example: guard:goTo("Gate")
+    --- Example: guard:goTo(game.player, { run = true })
+    --- Example: guard:goTo(vector.create(4, 0, -6), { within = 1, facing = 180 })
+    function goTo(self, place: string | vector | Thing | Character, options: GoOptions?): ()
+
+    --- The NPC keeps near someone (`game.player`, or another NPC) until told
+    --- otherwise: it walks after them when they are more than `distance`
+    --- metres off (3 unless said), at their pace (walking when they walk,
+    --- running when they run, hurrying only to close a gap), and
+    --- stands facing them when near. It goes on following until `stop`,
+    --- `goTo` or another `follow`; when it cannot reach them it says so
+    --- once (`onCannotReach`) and tries again every two seconds.
+    --- Example: companion:follow(game.player, { distance = 3 })
+    function follow(self, who: Character, options: FollowOptions?): ()
+
+    --- The NPC stops where it is: no more walking or following, and no
+    --- `onArrive`.
+    --- Example: guard:stop()
+    function stop(self): ()
+
+    --- Calls `handler` each time the NPC gets where `goTo` sent it, with
+    --- the NPC and what `goTo` was given; if that is gone, where the NPC
+    --- stands, so `where` is never nil. `lore check` calls it once.
+    --- Example: guard:onArrive(function(guard, where) print(guard.name .. " is at " .. tostring(where)) end)
+    function onArrive(self, handler: (npc: Npc, where: string | vector | Thing | Character) -> ()): ()
+
+    --- Calls `handler` when the NPC cannot get where it is walking, with a
+    --- sentence that says who, where to and why: a door is locked, or the
+    --- script shut it again after it was opened (let it open, or lock it
+    --- with usable = false), nothing
+    --- joins the two places, the place is off the ground, or something it
+    --- cannot get round was in the way for a while (it tries again twice
+    --- first). How far short it got is said too. A walk to a place ends
+    --- there; a follower goes on trying. With no function the sentence is
+    --- written to the log. `lore check` calls it once.
+    --- Example: guard:onCannotReach(function(guard, why) print(why) end)
+    function onCannotReach(self, handler: (npc: Npc, why: string) -> ()): ()
 
     --- Takes the NPC out of the world for good. Reading it afterwards is an
     --- error that says it is gone, so let go of it too (`guard = nil`);
@@ -1229,6 +1297,15 @@ end
 --- as the NPC's fields of the same names do.
 type NpcOptions = { name: string, at: string | vector | Thing, facing: number?, side: string?, sightDistance: number?, sightAngle: number?, hearing: number?, nightSight: number?, alertness: number? }
 
+--- How an NPC walks to a place (`npc:goTo`): `run` to run, `within` how
+--- close is there in metres, `facing` the way to face on arriving
+--- (degrees left).
+type GoOptions = { run: boolean?, within: number?, facing: number? }
+
+--- How an NPC follows someone (`npc:follow`): `distance` is how far
+--- behind it keeps, in metres (3 unless said); `run` to run all the way.
+type FollowOptions = { distance: number?, run: boolean? }
+
 --- How someone feels about someone else, or one side about another.
 type Feeling = "friend" | "neutral" | "enemy"
 
@@ -1293,6 +1370,7 @@ declare extern type Side with
     --- Example: game.side("Town"):forgive(game.player)
     function forgive(self, who: Character): ()
 end
+
 --- Where on the screen a piece of the HUD is pinned.
 type HudPlace = "top left" | "top" | "top right" | "left" | "center" | "right" | "bottom left" | "bottom" | "bottom right"
 
@@ -1395,8 +1473,8 @@ declare extern type HudText with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: ammo.opacity = 0.5
     opacity: number
 
@@ -1419,8 +1497,8 @@ declare extern type HudText with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: ammo.clipTo = panel
     clipTo: HudBox | HudImage | nil
 
@@ -1526,8 +1604,8 @@ declare extern type HudBar with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: bar.opacity = 0.5
     opacity: number
 
@@ -1550,8 +1628,8 @@ declare extern type HudBar with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: bar.clipTo = panel
     clipTo: HudBox | HudImage | nil
 
@@ -1634,8 +1712,8 @@ declare extern type HudBox with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: dot.opacity = 0.5
     opacity: number
 
@@ -1652,8 +1730,8 @@ declare extern type HudBox with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: dot.clipTo = panel
     clipTo: HudBox | HudImage | nil
 
@@ -1760,8 +1838,8 @@ declare extern type HudLine with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: line.opacity = 0.5
     opacity: number
 
@@ -1784,8 +1862,8 @@ declare extern type HudLine with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: line.clipTo = panel
     clipTo: HudBox | HudImage | nil
 
@@ -1853,8 +1931,8 @@ declare extern type HudImage with
     pressed: boolean
 
     --- How solid the piece is, from 0 (see-through) to 1 (solid, the
-    --- usual), held to that range. It is multiplied into every colour the
-    --- piece draws.
+    --- usual), held to that range. The piece fades as one picture: its
+    --- shadow, fill, border and text do not show through each other.
     --- Example: compass.opacity = 0.5
     opacity: number
 
@@ -1871,8 +1949,8 @@ declare extern type HudImage with
 
     --- Another piece, a box or image: this one is drawn only inside that
     --- piece's shape as it is on the screen now, with its rounded corners.
-    --- nil, the usual, draws it whole. A box that is turned cuts to the
-    --- straight box round it.
+    --- nil, the usual, draws it whole. A box that is turned or scaled cuts
+    --- along its turned, scaled edges.
     --- Example: compass.clipTo = panel
     clipTo: HudBox | HudImage | nil
 

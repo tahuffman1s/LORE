@@ -64,6 +64,8 @@ fn main() -> Result<(), UiError> {
             } => {
                 println!("styled {w:5.0} x {h:<5.0} at {x:6.0}, {y:<6.0}");
             }
+            Draw::Group { opacity } => println!("group at {opacity:.2} {{"),
+            Draw::EndGroup => println!("}}"),
         }
     }
     Ok(())

@@ -146,6 +146,9 @@ pub(crate) struct Handlers {
     pub used: Vec<(Rc<str>, Function)>,
     /// `npc:onUse`: each with the NPC it is for.
     pub npc_used: Vec<(CharacterId, Function)>,
+    /// `npc:onArrive` and `npc:onCannotReach`, each with its NPC.
+    pub npc_arrived: Vec<(CharacterId, Function)>,
+    pub npc_unreached: Vec<(CharacterId, Function)>,
     /// `npc:onSee`, `npc:onLoseSight` and `npc:onHear`, each with the NPC
     /// it is for.
     pub npc_saw: Vec<(CharacterId, Function)>,

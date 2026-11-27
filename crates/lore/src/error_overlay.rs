@@ -568,6 +568,7 @@ mod tests {
                 | Draw::Shadow { position, size, .. } => {
                     boxes.push((position, size));
                 }
+                Draw::Group { .. } | Draw::EndGroup => {}
             }
         }
         (words, boxes)

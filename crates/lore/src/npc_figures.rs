@@ -478,4 +478,91 @@ mod tests {
         assert!(figure.fallen.is_some_and(|t| t > 0.1));
         assert!(figure.gaze.yaw.abs() < 0.05);
     }
+
+    /// Where the bone `bone` of `figure` is in the world, as of its newest
+    /// tick.
+    fn bone_in_world(kind: &Kind, figure: &Figure, bone: usize) -> [f32; 3] {
+        let mut placed = vec![lore_anim::math::IDENTITY; figure.pose.len()];
+        kind.body.skeleton().place(&figure.pose, &mut placed);
+        let [x, y, z, _] = placed[bone][3];
+        let yaw = if kind.body.facing() > 0.0 {
+            figure.yaw + std::f32::consts::PI
+        } else {
+            figure.yaw
+        };
+        let (s, c) = (yaw.sin(), yaw.cos());
+        [
+            figure.feet[0] + c * x + s * z,
+            figure.feet[1] + y,
+            figure.feet[2] - s * x + c * z,
+        ]
+    }
+
+    #[test]
+    fn a_walking_npc_plants_its_feet_turns_smoothly_and_still_looks_at_the_player() {
+        // Behind the player and facing away: it turns right round to walk
+        // past them, ahead (-Z).
+        let (mut playing, mut input) = played(
+            r#"local guard = game.npc { name = "Guard", at = vector.create(1, 0, 3), facing = 180 }
+            guard:goTo(vector.create(1, 0, -20))"#,
+            1,
+        );
+        let kind = playing.npc_figures.kind.as_ref().map(|kind| {
+            let skeleton = kind.body.skeleton();
+            let foot = |names: [&str; 2]| names.iter().find_map(|name| skeleton.find(name));
+            (foot(["foot_l", "LeftFoot"]), foot(["foot_r", "RightFoot"]))
+        });
+        let Some((Some(left), Some(right))) = kind else {
+            panic!("the mannequin has no feet");
+        };
+        let mut turned_most: f32 = 0.0;
+        let (mut body_went, mut planted_went) = (0.0, 0.0);
+        let mut was: Option<([f32; 3], [f32; 3], [f32; 3])> = None;
+        let mut looked = false;
+        for tick in 0..400 {
+            playing.tick(input.tick(), STEP);
+            let kind = playing.npc_figures.kind.as_ref().unwrap();
+            let figure = &playing.npc_figures.shown[0];
+            let gap = (figure.yaw - figure.yaw_before + std::f32::consts::PI)
+                .rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI;
+            turned_most = turned_most.max(gap.abs());
+            looked |= figure.gaze != Gaze::AHEAD
+                && (figure.feet[0] - figure.feet_before[0]).abs()
+                    + (figure.feet[2] - figure.feet_before[2]).abs()
+                    > 0.01;
+            let now = (
+                figure.feet,
+                bone_in_world(kind, figure, left),
+                bone_in_world(kind, figure, right),
+            );
+            // Once it is under way, not while it starts.
+            if let Some((feet, l, r)) = was
+                && tick > 60
+            {
+                let flat = |a: [f32; 3], b: [f32; 3]| (a[0] - b[0]).hypot(a[2] - b[2]);
+                // The foot on the ground: the lower, while it is down.
+                let (foot, before) = if now.1[1] < now.2[1] {
+                    (now.1, l)
+                } else {
+                    (now.2, r)
+                };
+                if foot[1] < 0.13 {
+                    body_went += flat(feet, now.0);
+                    planted_went += flat(before, foot);
+                }
+            }
+            was = Some(now);
+        }
+        // No snap round to a corner: never more than a body turns in a tick.
+        assert!(turned_most <= 5.0 * STEP + 1e-4, "{turned_most}");
+        assert!(body_went > 0.5, "{body_went}");
+        // The foot on the ground keeps to it while the body goes on.
+        assert!(
+            planted_went < body_went * 0.35,
+            "{planted_went} against {body_went}"
+        );
+        // Passing close by the player, its head turned to them as it walked.
+        assert!(looked);
+    }
 }

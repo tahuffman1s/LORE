@@ -107,7 +107,13 @@ impl Noticing {
                 };
                 let wary = |them: CharacterId| wary(&sides, who, them);
                 (npc.awareness).step(&npc.senses, &pace, wary, |change| told.push((who, change)));
-                turn_to_notice(npc, world.seconds);
+                // One with somewhere to go faces the way it walks; it turns
+                // to what it noticed again from where it ends up.
+                if npc.mind.walk.goal().is_some() {
+                    npc.turning = Turning::default();
+                } else {
+                    turn_to_notice(npc, world.seconds);
+                }
             }
         }
         for npc in npcs.list() {
@@ -140,10 +146,9 @@ fn wary(sides: &Sides, me: CharacterId, them: CharacterId) -> bool {
 /// ([`crate::npc_figures`]); the body follows when what it noticed is
 /// further round than they reach alone.
 ///
-/// Only for an NPC that is not walking: one walking faces the way it goes.
-/// Walking (#54) writes `mind.facing` itself while it walks, so its merge
-/// calls this only for an NPC whose walk is not going (`!npc.mind.walk.walking()`),
-/// and clears `npc.turning` when a walk starts.
+/// Only for an NPC with nowhere to go: one walking faces the way it goes
+/// (walking writes `mind.facing` itself), so the tick calls this for the
+/// others and forgets the turn of one that sets off.
 pub(crate) fn turn_to_notice(npc: &mut Npc, seconds: f32) {
     let facing = npc.mind.facing;
     let goal = match npc.awareness.interest() {

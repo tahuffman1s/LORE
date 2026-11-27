@@ -443,6 +443,12 @@ pub(crate) struct ThingUses {
 }
 
 impl ThingUses {
+    /// Whether the script has left the thing placed as `id` usable: true
+    /// until it sets `usable = false`.
+    pub(crate) fn usable(&self, id: &str) -> bool {
+        self.uses.borrow().get(id).is_none_or(|said| said.usable)
+    }
+
     /// Whether the engine shows its own prompt (`game.showUsePrompt`).
     pub(crate) fn shows_prompt(&self) -> bool {
         self.prompt.get()
@@ -825,6 +831,23 @@ pub(crate) fn slide_watched(shared: &Shared, arrived: bool) -> Vec<String> {
 pub(crate) fn place_of(shared: &Shared, value: &AnyUserData) -> Option<[f32; 3]> {
     let thing = value.borrow::<ThingRef>().ok()?;
     shared.things.find(&thing.0).map(|placed| placed.position)
+}
+
+/// The id of the thing placed in the map that `value` is, and where it
+/// stands.
+pub(crate) fn id_and_place(shared: &Shared, value: &AnyUserData) -> Option<(Rc<str>, [f32; 3])> {
+    let thing = value.borrow::<ThingRef>().ok()?;
+    let placed = shared.things.find(&thing.0)?;
+    Some((Rc::clone(&thing.0), placed.position))
+}
+
+/// What a script calls the thing placed as `id` in a message: its name,
+/// or its id.
+pub(crate) fn called_by_id(shared: &Shared, id: &str) -> String {
+    shared
+        .things
+        .find(id)
+        .map_or_else(|| id.to_owned(), |thing| called(&thing).to_owned())
 }
 
 /// The thing the player carries, for `game.player.carrying`.

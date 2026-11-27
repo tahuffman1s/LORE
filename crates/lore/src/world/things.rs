@@ -582,6 +582,11 @@ impl Things {
             .is_some_and(|stood| stood.glide.is_some())
     }
 
+    /// Whether anything is sliding now.
+    pub(super) fn any_sliding(&self) -> bool {
+        self.stood.iter().any(|stood| stood.glide.is_some())
+    }
+
     /// How many solid things there are.
     pub(super) fn len(&self) -> usize {
         self.stood.len()

@@ -297,10 +297,7 @@ fn hint_for(message: &str) -> Option<String> {
 }
 
 /// The candidate closest to `name`, if one is close enough to be a likely typo.
-pub(crate) fn closest<'a>(
-    name: &str,
-    candidates: impl IntoIterator<Item = &'a str>,
-) -> Option<&'a str> {
+pub fn closest<'a>(name: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
     let wanted = name.to_lowercase();
     let allowed = (wanted.chars().count() / 3).max(1);
     candidates

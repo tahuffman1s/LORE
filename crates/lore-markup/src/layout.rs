@@ -225,6 +225,8 @@ pub(crate) struct LNode {
     pub rect: Rect,
     /// The transform painting used for this node.
     pub matrix: [f32; 6],
+    /// The clip painting cut this node by, which the pointer is cut by too.
+    pub cut: Option<crate::paint::Clip>,
 }
 
 impl LNode {
@@ -241,6 +243,7 @@ impl LNode {
             text: TextData::default(),
             rect: Rect::default(),
             matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            cut: None,
         }
     }
 }

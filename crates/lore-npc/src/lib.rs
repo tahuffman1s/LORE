@@ -8,8 +8,9 @@
 //! computer, so an NPC is as repeatable as the rest of the simulation.
 //!
 //! - [`Mind`]: what an NPC asks of its body each tick, as a
-//!   [`lore_physics::MoveInput`]. Today it stands, facing one way; the
-//!   rules that walk, follow and flee fill it in.
+//!   [`lore_physics::MoveInput`]: to stand, or to walk somewhere.
+//! - [`Walk`]: walking somewhere, round corners and through doors, past
+//!   others, and why it cannot get there ([`Trouble`]) when it cannot.
 //! - [`Gaze`]: where a head turns to look at someone, within what a person's
 //!   neck allows, and how quickly it gets there.
 //! - [`push_out`]: how far to move one upright body out of another's way.
@@ -30,6 +31,7 @@ mod gaze;
 mod mind;
 mod senses;
 mod sides;
+mod walk;
 
 pub use apart::{Upright, push_out};
 pub use awareness::{
@@ -48,4 +50,7 @@ pub use sides::{
     Act, DEFAULT_FORGIVES, DEFAULT_REMEMBERS, FORGIVES_ALL, FORGIVING_SECONDS, Feeling,
     FeelingChange, GRUDGES, LONGEST_NAME, MOST_SIDES, Side, SideSaid, Sides, SidesError, Taken,
     Temper, Toward,
+};
+pub use walk::{
+    Blocker, Face, Goal, Going, News, Passing, STROLL, Trouble, Walk, pass, turned_toward,
 };
