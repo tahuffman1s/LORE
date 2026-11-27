@@ -175,6 +175,9 @@ pub(crate) fn turn_to_notice(npc: &mut Npc, seconds: f32) {
     }
     if npc.turning.on {
         npc.mind.facing = turn_toward(facing, goal, TURN_SPEED * seconds);
+        // The mind turns toward the way it wants to face each tick: it
+        // wants this way now, or it would turn back.
+        npc.mind.face(npc.mind.facing);
         let left = libm::fabsf(turn_toward(npc.mind.facing, goal, f32::INFINITY) - npc.mind.facing);
         if left.min(std::f32::consts::TAU - left) <= TURNED {
             npc.turning.on = false;
