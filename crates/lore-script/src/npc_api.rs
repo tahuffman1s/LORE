@@ -378,6 +378,14 @@ impl NpcState {
             })
     }
 
+    /// The NPC called `name`, in any capitals, if there is one.
+    pub(crate) fn id_named(&self, characters: &Characters, name: &str) -> Option<CharacterId> {
+        (self.entries.borrow().iter()).find_map(|entry| {
+            let (known, _) = characters.name_and_place(entry.id)?;
+            known.eq_ignore_ascii_case(name).then_some(entry.id)
+        })
+    }
+
     /// Whether `id` is an NPC still in the game.
     pub(crate) fn has(&self, id: CharacterId) -> bool {
         self.entries.borrow().iter().any(|entry| entry.id == id)
@@ -1375,7 +1383,7 @@ impl NpcState {
 
 /// Reads an option table `given` for `function`, which takes `known`: an
 /// error for anything else, with what to write instead.
-fn options_of(
+pub(crate) fn options_of(
     lua: &Lua,
     given: &Value,
     function: &str,
@@ -1425,7 +1433,7 @@ fn options_of(
 }
 
 /// The option `key` of `options`: true or false, false if not given.
-fn flag(
+pub(crate) fn flag(
     lua: &Lua,
     options: Option<&Table>,
     key: &str,

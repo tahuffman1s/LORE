@@ -661,6 +661,116 @@ fn scripts_in(
     }
 }
 
+/// The longest `lore check --play` plays a plan, in seconds of game time.
+pub const PLAY_SECONDS: u32 = 10 * 60;
+
+/// `lore check --play`: plays `game` on `level` for real, with no window
+/// and as fast as it will go, while the bot plays the plan `game.onCheck`
+/// gives it. Says what the bot did as it does it, and fails, saying why,
+/// when the bot gets stuck or the plan is not done within
+/// [`PLAY_SECONDS`] of game time.
+pub fn play_plan(
+    game: ScriptGame,
+    level: Option<&lore_assets::Scene>,
+    actions: &ActionMap,
+    tick_rate: u32,
+) -> Result<(), String> {
+    let began = std::time::Instant::now();
+    let mut playing = crate::world::Playing::start(game, level, actions, tick_rate);
+    let mut input = Input::new(actions.clone());
+    let rate = tick_rate.max(1);
+    #[allow(clippy::cast_precision_loss)]
+    let step = 1.0 / rate as f32;
+    let mistake = |playing: &crate::world::Playing| {
+        (playing.world().game().host().last_error()).map(|error| {
+            format!(
+                "{} has a mistake (the error is shown above), so the plan was not played to \
+                 its end. Fix it, then run `lore check --play` again.",
+                error.file
+            )
+        })
+    };
+    // The first tick: the game starts.
+    playing.tick(input.tick(), step);
+    if let Some(mistake) = mistake(&playing) {
+        return Err(mistake);
+    }
+    let host = playing.world_mut().game_mut().host_mut();
+    if !host.start_check_plan() {
+        return Err(format!(
+            "{ENTRY_SCRIPT} gives the bot nothing to play: `lore check --play` plays the plan \
+             game.onCheck gives it. Write one, for example:\n  game.onCheck(function()\n      \
+             game.bot.goTo(\"Tower\")\n  end)"
+        ));
+    }
+    println!("The bot plays the plan game.onCheck gives it, with no window:");
+    let most = PLAY_SECONDS.saturating_mul(rate);
+    let mut ticks = 1;
+    let mut told = 0;
+    let mut still = 0;
+    while ticks < most {
+        playing.tick(input.tick(), step);
+        ticks += 1;
+        if playing.world().game().host().time_speed() == 0.0 {
+            still += 1;
+        }
+        let story = playing.world().bot_story();
+        for line in story.get(told..).unwrap_or_default() {
+            println!("  {}", line.written(rate));
+        }
+        told = story.len();
+        if let Some(mistake) = mistake(&playing) {
+            return Err(mistake);
+        }
+        let world = playing.world();
+        if !world.bot_playing() && !world.bot_drove() {
+            break;
+        }
+    }
+    let world = playing.world();
+    let seconds = f64::from(ticks) / f64::from(rate);
+    let took = began.elapsed().as_secs_f64();
+    match world.bot_story().last() {
+        Some(line) if line.stuck => Err(format!(
+            "The plan did not finish: {}. The check played {seconds:.1} seconds of game time \
+             (in {took:.1} s). Change the level or the plan, then run `lore check --play` again.",
+            line.said
+        )),
+        None if still + 1 >= ticks => Err(
+            "The game stood still the whole time (it was paused, or a screen with pauses = true, \
+             such as a title screen, was showing), so the bot never played: it plays only while \
+             the game runs. In game.onCheck, close what holds the game first, for example \
+             title:hide()."
+                .to_owned(),
+        ),
+        _ if world.bot_playing() => {
+            let [x, y, z] = world.player().position;
+            Err(format!(
+                "The plan was not done after {} minutes of game time; the player stood at \
+                 ({x:.1}, {y:.1}, {z:.1}). A plan for a check should finish: end it with the \
+                 step that shows the game can be finished.",
+                PLAY_SECONDS / 60
+            ))
+        }
+        Some(line) if line.said == crate::world::BOT_FINISHED => {
+            println!(
+                "The plan finished in {seconds:.1} seconds of game time, played in {took:.1} s."
+            );
+            Ok(())
+        }
+        Some(_) => Err(
+            "The bot's plan was stopped before its end (game.bot.stop(), or a button), so the \
+             check could not show the game can be finished. Take out what stops it, then run \
+             `lore check --play` again."
+                .to_owned(),
+        ),
+        None => Err(
+            "game.onCheck gave the bot no steps. Give it some, such as game.bot.goTo(\"Tower\")."
+                .to_owned(),
+        ),
+    }
+}
+
 /// What `lore check` says after trying a level out for walking: that the
 /// player can start at every spawn point, or what to change, a line each.
 #[must_use]

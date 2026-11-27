@@ -762,6 +762,21 @@ if false then
         print(side, toward, now, before)
     end)
 end
+game.onCheck(function()
+    game.bot.goTo("Gate")
+    game.bot.goTo(vector.create(4, 0, -6), { run = true, within = 1 })
+    game.bot.lookAt("Lever")
+    game.bot.use("Lever")
+    game.bot.press("jump")
+    game.bot.press("crouch", 2)
+    game.bot.attack("Bandit")
+    game.bot.wait(2)
+end)
+game.bot.onDone(function() print("done") end)
+game.bot.onStuck(function(why: string) print(why) end)
+game.bot.playerTakesOver = false
+local botPlaying: boolean = game.bot.playing
+if botPlaying then game.bot.stop() end
 game.showUsePrompt(true)
 local meant: (Thing | Npc)? = game.player.lookingAt
 print(meant, game.player.useProgress)

@@ -49,6 +49,7 @@ mod body_api;
 mod builtin;
 mod camera_api;
 pub use body_api::{AnimationAsk, BUILT_IN_HELD, BUILT_IN_MODELS, CameraView, HeldSaid};
+mod bot_api;
 mod character_api;
 mod clock_api;
 mod dice_api;
@@ -82,6 +83,7 @@ mod weapon_api;
 mod weather_api;
 
 pub use audio::{AudioCommand, ScriptNoise, SoundId, SoundRequest, SoundTweak};
+pub use bot_api::{BotAsk, BotStep, BotTarget};
 pub use camera_api::{CameraSaid, CameraTarget, MOST_PATH_POINTS, ShotSaid};
 pub use character_api::CharacterId;
 pub use clock_api::WorldClock;

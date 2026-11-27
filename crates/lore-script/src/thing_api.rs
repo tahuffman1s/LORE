@@ -595,7 +595,7 @@ impl ThingState {
         Some((words?, self.progress.get()))
     }
 
-    fn find(&self, id: &str) -> Option<Placed> {
+    pub(crate) fn find(&self, id: &str) -> Option<Placed> {
         self.placed
             .borrow()
             .iter()
@@ -644,7 +644,7 @@ pub(crate) fn handle(lua: &Lua, shared: &Shared, id: &str) -> mlua::Result<AnyUs
 }
 
 /// What a script calls a thing in a message: its name, or its id if it has none.
-fn called(thing: &Placed) -> &str {
+pub(crate) fn called(thing: &Placed) -> &str {
     if thing.name.is_empty() {
         &thing.id
     } else {

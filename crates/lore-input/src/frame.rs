@@ -118,6 +118,24 @@ impl InputFrame {
         }
     }
 
+    /// Puts `action` in `state`, as though a device had: how something that
+    /// plays in the player's place (a bot) presses the player's buttons.
+    /// An id from a different map changes nothing.
+    pub fn set(&mut self, action: ActionId, state: ActionState) {
+        if let Some(slot) = self.actions.get_mut(action.index()) {
+            *slot = state;
+        }
+    }
+
+    /// Whether a person did anything on purpose this tick: pressed a button,
+    /// moved the mouse, or pushed a stick from the middle.
+    #[must_use]
+    pub fn touched(&self) -> bool {
+        self.actions.iter().any(|action| {
+            action.just_pressed || action.delta.iter().any(|counts| counts.abs() > 2.0)
+        }) || self.heard.is_some()
+    }
+
     /// The full state of an action. An id from a different map reads as idle.
     #[must_use]
     pub fn get(&self, action: ActionId) -> ActionState {

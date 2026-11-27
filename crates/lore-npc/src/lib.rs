@@ -24,6 +24,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod apart;
+mod bot;
 mod gaze;
 mod mind;
 mod senses;
@@ -31,6 +32,10 @@ mod sides;
 mod walk;
 
 pub use apart::{Upright, push_out};
+pub use bot::{
+    Arms, BETWEEN_BURSTS, BURST, Bot, BotNews, HUNT_FOR, Hands, KEEP_OFF, KEEP_WITHIN, LOOK_FOR,
+    Seen, Skill, Spot, Step, Stuck,
+};
 pub use gaze::{Gaze, HUMAN, NeckLimits, SHARES};
 pub use mind::{Around, Mind};
 pub use senses::{

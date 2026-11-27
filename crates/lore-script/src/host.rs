@@ -206,6 +206,8 @@ pub struct ScriptHost {
     things: Rc<crate::thing_api::ThingState>,
     /// Who is an NPC; they outlive a reload too.
     npcs: Rc<crate::npc_api::NpcState>,
+    /// What the scripts asked of the bot.
+    bot: Rc<crate::bot_api::BotState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
     /// What the engine feeds the script about the screen, the frames and
@@ -550,6 +552,7 @@ impl ScriptHost {
             camera: Rc::default(),
             things,
             npcs,
+            bot: Rc::default(),
             versions: 0,
             tools: Rc::default(),
             settings,
@@ -2485,6 +2488,143 @@ impl ScriptHost {
         }
     }
 
+    /// What the scripts asked of the bot since this was last called, in
+    /// the order they asked (`game.bot.goTo`, `game.bot.stop`, ...). Empty,
+    /// and nothing made, in a game that never mentions the bot.
+    pub fn take_bot_asks(&mut self) -> Vec<crate::BotAsk> {
+        self.bot.take_asks()
+    }
+
+    /// Says whether the bot is playing, and how many steps of its plan are
+    /// left (`game.bot.playing`).
+    pub fn set_bot_playing(&mut self, playing: bool, steps_left: usize) {
+        self.bot.set_playing(playing, steps_left);
+    }
+
+    /// Whether a button pressed by a person takes the controls back from
+    /// the bot (`game.bot.playerTakesOver`, true unless the script says).
+    #[must_use]
+    pub fn bot_yields_to_player(&self) -> bool {
+        self.bot.player_takes_over()
+    }
+
+    /// What the script calls what a step of the bot's plan is aimed at.
+    #[must_use]
+    pub fn bot_target_name(&self, target: &crate::BotTarget) -> String {
+        match target {
+            crate::BotTarget::Place {
+                name: Some(name), ..
+            } => name.to_string(),
+            crate::BotTarget::Place { at: [x, y, z], .. } => format!("({x:.1}, {y:.1}, {z:.1})"),
+            crate::BotTarget::Thing(id) => self.things.find(id).map_or_else(
+                || id.to_string(),
+                |thing| crate::thing_api::called(&thing).to_owned(),
+            ),
+            crate::BotTarget::Who(who) => (self.characters.name_and_place(*who))
+                .map_or_else(|| "someone who left".to_owned(), |(name, _)| name),
+        }
+    }
+
+    /// Where the thing placed in the map as `id` stands, if there is one.
+    #[must_use]
+    pub fn thing_place(&self, id: &str) -> Option<[f32; 3]> {
+        self.things.find(id).map(|thing| thing.position)
+    }
+
+    /// What the game calls `action`, as `game.input` reads it.
+    #[must_use]
+    pub fn action_name(&self, action: lore_input::ActionId) -> String {
+        self.actions.borrow().name(action).to_owned()
+    }
+
+    /// Tells the script the bot did every step of its plan
+    /// (`game.bot.onDone`).
+    pub fn bot_done(&mut self) {
+        self.bot.set_playing(false, 0);
+        let Some(version) = &self.running else {
+            return;
+        };
+        let shared = Rc::clone(&version.shared);
+        let handlers = shared.handlers.borrow().bot_done.clone();
+        for handler in handlers {
+            if self.paused || !self.call(&shared, &handler, ()) {
+                break;
+            }
+        }
+    }
+
+    /// Tells the script the bot is stuck, and why (`said`, a whole
+    /// sentence): its `game.bot.onStuck` functions are called with it, or
+    /// with none the log says it. The rest of the plan is given up.
+    pub fn bot_stuck(&mut self, said: &str) {
+        self.bot.set_playing(false, 0);
+        let Some(version) = &self.running else {
+            return;
+        };
+        let shared = Rc::clone(&version.shared);
+        let handlers = shared.handlers.borrow().bot_stuck.clone();
+        if handlers.is_empty() {
+            log::warn!(
+                "{said}. To answer it in the game, write game.bot.onStuck(function(why) ... end)."
+            );
+            return;
+        }
+        let Ok(why) = version.vm.create_string(said) else {
+            return;
+        };
+        for handler in handlers {
+            if self.paused || !self.call(&shared, &handler, why.clone()) {
+                break;
+            }
+        }
+    }
+
+    /// For `lore check`: calls the script's `game.onCheck` functions, then
+    /// says the bot finished (`game.bot.onDone`) and was stuck
+    /// (`game.bot.onStuck`, with a made-up reason), so each runs once.
+    /// Nothing is played, and what they asked of the bot is let go. How
+    /// many functions there were.
+    pub fn pretend_bot(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let count = {
+            let handlers = version.shared.handlers.borrow();
+            handlers.check.len() + handlers.bot_done.len() + handlers.bot_stuck.len()
+        };
+        if count == 0 {
+            return 0;
+        }
+        self.start_check_plan();
+        self.bot_done();
+        self.bot_stuck(
+            "The bot could not reach Gate: the door \"Gate door\" is locked (a made-up \
+             reason, from lore check)",
+        );
+        drop(self.bot.take_asks());
+        self.bot.set_playing(false, 0);
+        count
+    }
+
+    /// Calls the script's `game.onCheck` functions, which give the bot its
+    /// plan for `lore check --play`: false when the script has none.
+    pub fn start_check_plan(&mut self) -> bool {
+        let Some(version) = &self.running else {
+            return false;
+        };
+        let shared = Rc::clone(&version.shared);
+        let handlers = shared.handlers.borrow().check.clone();
+        if handlers.is_empty() {
+            return false;
+        }
+        for handler in handlers {
+            if !self.call(&shared, &handler, ()) {
+                break;
+            }
+        }
+        true
+    }
+
     /// Says the world stopped the NPC `id` walking with nothing to tell
     /// (its health is gone): where it was going is forgotten.
     pub fn npc_stopped(&mut self, id: CharacterId) {
@@ -3123,6 +3263,7 @@ impl ScriptHost {
             things: Rc::clone(&self.things),
             thing_uses: crate::thing_api::ThingUses::default(),
             npcs: Rc::clone(&self.npcs),
+            bot: Rc::clone(&self.bot),
             noise_tables: RefCell::new(Vec::new()),
             npc_version: crate::npc_api::NpcVersion::default(),
             thing_handles: RefCell::default(),
