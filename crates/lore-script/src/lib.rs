@@ -102,7 +102,7 @@ pub use lighting_api::{EyeSaid, OcclusionSaid};
 pub use listen_api::BindingAsk;
 pub use look_api::{LookSaid, ToneMappingSaid};
 pub use lore_weapons as weapons;
-pub use npc_api::{DEFAULT_LOOK_DISTANCE, NPC_KIND, NpcAsk, NpcSenses, NpcTold};
+pub use npc_api::{AwareAsk, DEFAULT_LOOK_DISTANCE, NPC_KIND, NpcAsk, NpcSenses, NpcTold};
 pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use shader_api::{
     MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderSaid, ShaderUse,

@@ -26,6 +26,7 @@ mod bodies;
 mod climate;
 mod fluids;
 mod ground;
+mod noticing;
 mod npcs;
 mod sensing;
 mod spawn;
@@ -71,6 +72,7 @@ pub struct World {
     witnessing: witness::Witnessing,
     /// What the NPCs see and hear, kept from tick to tick.
     sensing: sensing::Sensing,
+    noticing: noticing::Noticing,
     /// The number the next dummy or NPC is known by to a weapon. The player
     /// is 0.
     next_target: u32,
@@ -285,6 +287,7 @@ impl World {
             npcs,
             witnessing: witness::Witnessing::default(),
             sensing: sensing::Sensing::default(),
+            noticing: noticing::Noticing::default(),
             next_target,
             standing: Vec::new(),
             tick: 0,
@@ -1395,6 +1398,14 @@ impl Game for World {
             weather: self.climate.weather(),
         };
         (self.sensing).tick(&mut self.npcs, self.game.host_mut(), &this_tick);
+        // What each NPC makes of what it sensed: how aware it is of whom,
+        // and the turn of a standing one toward what it noticed.
+        let noticing = noticing::Tick {
+            tick: self.tick,
+            seconds: self.ground.step,
+            notice: self.difficulty().notice,
+        };
+        (self.noticing).tick(&mut self.npcs, self.game.host_mut(), &noticing);
         // Who holds what against whom: what was done up to now, who
         // witnessed it, and what people near each other told each other.
         // Last of all, so each NPC's senses are those of this very tick:

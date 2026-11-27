@@ -35,6 +35,10 @@ pub struct Npc {
     pub down: bool,
     /// What it sees and has lately heard (see `super::sensing`).
     pub senses: Senses<CharacterId, crate::noise::Which>,
+    /// What it has noticed, bit by bit (see `super::noticing`).
+    pub awareness: lore_npc::Awareness<CharacterId>,
+    /// How it is turning, as it stands, to what it noticed.
+    pub(crate) turning: super::noticing::Turning,
 }
 
 impl Npc {
@@ -171,6 +175,8 @@ impl Npcs {
                         npc.mind = Mind::standing(facing);
                         // Put somewhere new, it looks about afresh.
                         npc.senses.forget();
+                        npc.awareness.forget();
+                        npc.turning = super::noticing::Turning::default();
                         host.npc_blinded(id);
                     }
                 }
@@ -202,6 +208,8 @@ impl Npcs {
                 mind: Mind::standing(facing),
                 down: false,
                 senses: Senses::new(Keenness::default(), Some(CharacterId::PLAYER)),
+                awareness: lore_npc::Awareness::new(Some(CharacterId::PLAYER)),
+                turning: super::noticing::Turning::default(),
             },
         );
     }

@@ -536,6 +536,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut used = 0;
     let mut zones = 0;
     let mut sensing = 0;
+    let mut noticing = 0;
     let mut carrying = false;
     let mut slides = 0;
     let mut turned = 0;
@@ -687,6 +688,10 @@ fn check(folder: &Path) -> Result<(), String> {
         // Each NPC with onSee, onHear or onLoseSight is said to see the
         // player, hear a step of theirs and lose sight of them.
         sensing = game.host_mut().pretend_senses();
+        // Each NPC with onAwareness is said to grow curious about the
+        // player, be alarmed, search and calm down, then to hear something
+        // at a place and calm again.
+        noticing = game.host_mut().pretend_awareness();
         game.tick(input.tick(), step);
         // The first thing that can be carried is said to be picked up,
         // put down, picked up again and thrown.
@@ -942,6 +947,20 @@ fn check(folder: &Path) -> Result<(), String> {
              said to see the player, hear a step of theirs and lose sight of them, with no \
              errors. Nobody really moved: what an NPC sees from where it stands is for \
              `lore run`."
+        ),
+    }
+    match noticing {
+        0 => {}
+        1 => println!(
+            "The one NPC with npc:onAwareness was said to grow curious about the player, be \
+             alarmed, search and calm down, then to hear something somewhere and calm again, \
+             with no errors. Nothing really happened: what an NPC notices is for `lore run`."
+        ),
+        noticing => println!(
+            "Each of the {noticing} NPCs with npc:onAwareness was said to grow curious about \
+             the player, be alarmed, search and calm down, then to hear something somewhere \
+             and calm again, with no errors. Nothing really happened: what an NPC notices is \
+             for `lore run`."
         ),
     }
     match zones {

@@ -120,6 +120,15 @@ game.npc { name = "Cook", at = "Gate", sightAngle = "wide" } -- wrong: an angle 
 game.audio.playAt("landing", vector.create(0, 0, 0), { npcsHear = "no" }) -- wrong: npcsHear is true or false
 print(who)
 
+-- An NPC notices bit by bit: its awareness is read, alert and calm change it.
+local level: number = guard:awarenessOf(game.player) -- wrong: a level is a word, "curious"
+print(guard:awarenessOf("Player")) -- wrong: it takes a character, such as game.player
+guard.alertness = "high" -- wrong: alertness is a number, 1 as a person
+guard:onAwareness(function(who: Character) end) -- wrong: who is nil when it is a place: Character?
+guard:alert("Gate") -- wrong: a place is a vector, game.thing("Gate").position
+game.showNoticeMarks("yes") -- wrong: it takes true or false
+print(level)
+
 -- Difficulty is a dial of named steps: its level is read, its name set.
 game.difficulty.name = 2 -- wrong: a step is named in text
 print(game.difficulty.scale("hard")) -- wrong: it scales a number

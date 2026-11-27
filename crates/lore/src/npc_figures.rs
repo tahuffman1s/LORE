@@ -31,6 +31,10 @@ pub(crate) const MOST_DRAWN: usize = (lore_render::MOST_FIGURES - 16) / 2;
 /// How long a body takes to go from standing to falling, in seconds.
 const FALL_FADE: f32 = 0.15;
 
+/// How high above the feet of someone noticed a head looks, in metres:
+/// their face, as near as a glance needs.
+const NOTICED_HEIGHT: f32 = 1.6;
+
 /// What every figure shares: the model, its clips and its bones.
 #[derive(Debug)]
 struct Kind {
@@ -293,9 +297,26 @@ impl NpcFigures {
             let within = host.npc_look_distance(npc.who);
             let eyes = npc.eyes();
             let near = (0..3).map(|i| (eyes[i] - eye[i]).powi(2)).sum::<f32>() <= within * within;
-            let goal = (within > 0.0 && near)
-                .then(|| Gaze::toward(eyes, figure.yaw, eye, &HUMAN))
-                .flatten()
+            // What it is curious about comes first: head and chest turn to
+            // it at once, the body following (see `world::noticing`).
+            let noticed = npc.awareness.interest().map(|notice| {
+                let [x, y, z] = notice.at;
+                let lift = if notice.is_place() {
+                    0.5
+                } else {
+                    NOTICED_HEIGHT
+                };
+                [x, y + lift, z]
+            });
+            // Past what the neck reaches, it looks at the player near by
+            // while its body turns.
+            let goal = noticed
+                .and_then(|point| Gaze::toward(eyes, figure.yaw, point, &HUMAN))
+                .or_else(|| {
+                    (within > 0.0 && near)
+                        .then(|| Gaze::toward(eyes, figure.yaw, eye, &HUMAN))
+                        .flatten()
+                })
                 .unwrap_or(Gaze::AHEAD);
             figure.gaze = figure.gaze.eased(goal, dt, &HUMAN);
         }
@@ -391,9 +412,10 @@ mod tests {
     #[test]
     fn an_npc_turns_its_head_to_the_player_who_comes_close_and_not_beyond() {
         // Ahead of the player and to the right, facing back toward them:
-        // the player is 45 degrees to its right.
+        // the player is 45 degrees to its right. It notices nothing, so its
+        // body does not turn to them (see `world::noticing`).
         let (playing, _) = played(
-            r#"game.npc { name = "Guard", at = vector.create(2, 0, -2), facing = 180 }"#,
+            r#"game.npc { name = "Guard", at = vector.create(2, 0, -2), facing = 180, alertness = 0 }"#,
             90,
         );
         let figure = &playing.npc_figures.shown[0];
@@ -404,9 +426,9 @@ mod tests {
         );
         assert!(figure.gaze.pitch.abs() < 0.1, "{:?}", figure.gaze);
 
-        // Told never to look, it looks ahead.
+        // Told never to look, and noticing nothing, it looks ahead.
         let (playing, _) = played(
-            r#"local guard = game.npc { name = "Guard", at = vector.create(2, 0, -2), facing = 180 }
+            r#"local guard = game.npc { name = "Guard", at = vector.create(2, 0, -2), facing = 180, alertness = 0 }
             guard.lookDistance = 0"#,
             90,
         );

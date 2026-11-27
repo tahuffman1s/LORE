@@ -19,16 +19,24 @@
 //! - [`Senses`]: what an NPC sees (a cone that walls block) and hears (the
 //!   very noises the player hears), kept as plain data for awareness and
 //!   rules to read.
+//! - [`Awareness`]: how much an NPC has noticed of each one and of a place,
+//!   bit by bit: unaware, curious, searching, alarmed, and calm again.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod apart;
+mod awareness;
 mod gaze;
 mod mind;
 mod senses;
 mod sides;
 
 pub use apart::{Upright, push_out};
+pub use awareness::{
+    ALARMED_AT, ALARMED_BELOW, Aware, Awareness, CALM_TOPS, CURIOUS_AT, CURIOUS_BELOW, Change,
+    DRAIN, GRACE_SECONDS, HEARING_FILL, HEARING_TOPS, MOST_BODIES, MOST_NOTICED, Notice, Pace,
+    SEARCHING_AT, SEARCHING_BELOW, SIGHT_FILL, WEAPON_HEARD, facing_toward, turn_toward,
+};
 pub use gaze::{Gaze, HUMAN, NeckLimits, SHARES};
 pub use mind::{Around, Mind};
 pub use senses::{

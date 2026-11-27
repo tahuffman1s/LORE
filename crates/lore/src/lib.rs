@@ -46,6 +46,7 @@ pub mod level;
 mod look;
 pub mod map;
 pub mod noise;
+mod notice_marks;
 mod npc_figures;
 mod pace;
 #[cfg(feature = "cli")]
