@@ -35,9 +35,10 @@ mod walk;
 
 pub use apart::{Upright, push_out};
 pub use awareness::{
-    ALARMED_AT, ALARMED_BELOW, Aware, Awareness, CALM_TOPS, CURIOUS_AT, CURIOUS_BELOW, Change,
-    DRAIN, GRACE_SECONDS, HEARING_FILL, HEARING_TOPS, MOST_BODIES, MOST_NOTICED, Notice, Pace,
-    SEARCHING_AT, SEARCHING_BELOW, SIGHT_FILL, WEAPON_HEARD, facing_toward, turn_toward,
+    ALARMED_AT, ALARMED_BELOW, Aware, Awareness, CALM_TOPS, CURIOUS_AT, CURIOUS_BELOW,
+    CURIOUS_TOPS, Change, DRAIN, FIRST_LOOK, GRACE_SECONDS, HEARING_FILL, HEARING_TOPS,
+    MOST_BODIES, MOST_NOTICED, Notice, Pace, QUICK_DRAIN, SEARCHING_AT, SEARCHING_BELOW,
+    SIGHT_FILL, WEAPON_HEARD, WEAPON_NEAR, facing_toward, tops_for, turn_toward,
 };
 pub use gaze::{Gaze, HUMAN, NeckLimits, SHARES};
 pub use mind::{Around, Mind};

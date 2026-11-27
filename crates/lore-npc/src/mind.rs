@@ -82,6 +82,14 @@ impl Mind {
         asked
     }
 
+    /// The way it wants to face (radians, turning left from -Z), which
+    /// `facing` turns toward: what a walk's end asked for, or the last
+    /// [`face`](Self::face).
+    #[must_use]
+    pub fn wants(&self) -> f32 {
+        self.wants
+    }
+
     /// Turns it, as it stands, to face `facing` (radians, turning left
     /// from -Z), a little each tick.
     pub fn face(&mut self, facing: f32) {

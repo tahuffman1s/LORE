@@ -6,8 +6,8 @@
 //! ([`Senses`]) fill it: sight by how strongly someone is seen, for as long
 //! as they are in view, so a glimpse at the edge of the cone in the dark
 //! fills it slowly and someone in plain view close by at once; a noise by
-//! how loud it reached the ears, the noise of a weapon more. Time drains
-//! it, slowly, once nothing has fed it for a moment ([`GRACE_SECONDS`]).
+//! how loud it reached the ears. Time drains it, slowly, once nothing has
+//! fed it for a moment ([`GRACE_SECONDS`]).
 //!
 //! From the gauge come four levels ([`Aware`]): unaware, curious (something
 //! is there: it looks that way), searching (someone was there: the place
@@ -17,33 +17,42 @@
 //! being alarmed it searches before it is calm. Hearing alone never fills
 //! the gauge past [`HEARING_TOPS`], which is searching and no further.
 //!
-//! Whether one may alarm at all is not the gauge's question: the world says
-//! it of each by `wary` (see [`Awareness::step`]). One it is not wary of (a
-//! friend, a neutral passer-by) is noticed, never more ([`CALM_TOPS`]), and
-//! the noises they make go unremarked; the body of one it is not wary of,
-//! found lying there, is an alarm about the place it lies.
+//! How far the gauge of someone may go is how the NPC feels about them
+//! (the world asks its table of sides, see [`Awareness::step`]): only an
+//! enemy is searched for or alarms it. A neutral (a stranger, the player
+//! in a game with no sides) is at most a curiosity ([`CURIOUS_TOPS`]): it
+//! looks at them, and forgets them a few seconds after they go
+//! ([`QUICK_DRAIN`]). A friend is only noticed ([`CALM_TOPS`]). The noises
+//! of those it is not an enemy of go unremarked, but a weapon's noise is
+//! never ignored: it is an interest in the place it came from. The body of
+//! one it is not an enemy of, found lying there, is an alarm about the
+//! place it lies, once.
 //!
 //! The numbers, at the middle of the difficulty dial and an alertness of 1:
-//! someone seen at a strength of 1 alarms in 0.2 seconds, of 0.75 (standing
-//! still, close, in plain light) in 0.36, of 0.3 (walking, near the end of
-//! sight) in 2.2, of 0.1 (the faintest in view) in 20; after the last sight
-//! of them it is alarmed 4.75 seconds more, searching till 16, curious till
-//! 23.5, and then calm.
+//! someone seen at a strength of 1 alarms in 0.7 seconds, of 0.75 (standing
+//! still, close, in plain light) in 1.15, of 0.6 (moving, 20 metres off) in
+//! 1.75, of 0.3 in 6.6; the first look at someone counts half
+//! ([`FIRST_LOOK`]). After the last sight of an enemy it is alarmed 4.75
+//! seconds more, searching till 16, curious till 23.5, and then calm.
 //!
 //! Everything is plain data in storage of a fixed size and pure functions
 //! of it, stepped once a tick: the same senses give the same levels on the
 //! same ticks.
 
 use crate::senses::{Heard, Senses, Sighting};
+use crate::sides::Feeling;
 
-/// The most people one NPC keeps a gauge for. The player always has a
-/// place; when they are full, a newcomer takes the place of the one noticed
-/// least, if it is noticed less than the newcomer would be.
+/// The most people one NPC keeps a gauge for. Who gets a place when they
+/// are full: the player always; one who may alarm it (an enemy) before one
+/// who may not, who gives way, the least noticed first; among enemies, the
+/// least noticed and longest unsensed gives way, but never one alarming it
+/// or sensed within [`GRACE_SECONDS`]; one who may not alarm it only takes
+/// the place of another such who is unaware and noticed less.
 pub const MOST_NOTICED: usize = 8;
 
 /// How many bodies an NPC remembers having found, so the same body in view
 /// does not alarm it again and again.
-pub const MOST_BODIES: usize = 4;
+pub const MOST_BODIES: usize = 8;
 
 /// From this full the NPC is curious.
 pub const CURIOUS_AT: f32 = 0.25;
@@ -60,23 +69,36 @@ pub const ALARMED_BELOW: f32 = 0.85;
 
 /// The fullest hearing alone fills the gauge: searching, never alarmed.
 pub const HEARING_TOPS: f32 = 0.8;
-/// The fullest the gauge of one the NPC is not wary of goes: noticed, not
-/// even curious.
+/// The fullest the gauge of a neutral goes: curious, never searching.
+pub const CURIOUS_TOPS: f32 = 0.5;
+/// The fullest the gauge of a friend goes: noticed, not even curious.
 pub const CALM_TOPS: f32 = 0.2;
 
 /// How much a second of being seen at a strength of 1 fills the gauge;
 /// the fill goes with the square of the strength, so a faint glimpse fills
 /// it far more slowly than a clear look.
-pub const SIGHT_FILL: f32 = 5.0;
+pub const SIGHT_FILL: f32 = 1.7;
+/// How much the time from the first look that sees someone to the next
+/// counts: half, as they may have left view just after it.
+pub const FIRST_LOOK: f32 = 0.5;
 /// How much one noise heard at a strength of 1 fills the gauge at once.
 pub const HEARING_FILL: f32 = 0.6;
 /// How many times more a weapon's noise (a shot, a blast) fills it.
 pub const WEAPON_HEARD: f32 = 4.0;
+/// How strongly a weapon's noise heard through a wall must arrive to make
+/// the NPC search at once, as one heard in the open does; fainter, it is
+/// curious at once. About 16 metres off for a shot.
+pub const WEAPON_NEAR: f32 = 0.25;
 /// How long the gauge holds after it was last fed, in seconds, before it
 /// drains.
 pub const GRACE_SECONDS: f32 = 1.0;
 /// How much the gauge drains each second after that.
 pub const DRAIN: f32 = 0.04;
+/// How much the gauge of one who may not alarm the NPC (a neutral, a
+/// friend) drains each second after that, and how fast any gauge fuller
+/// than it may be drains: a neutral is forgotten about three seconds after
+/// they go.
+pub const QUICK_DRAIN: f32 = 0.2;
 
 /// How aware an NPC is of someone or something: the four levels, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -142,6 +164,16 @@ impl Aware {
     }
 }
 
+/// How full the gauge of one the NPC feels `feeling` about may go.
+#[must_use]
+pub fn tops_for(feeling: Feeling) -> f32 {
+    match feeling {
+        Feeling::Enemy => ALARMED_AT,
+        Feeling::Neutral => CURIOUS_TOPS,
+        Feeling::Friend => CALM_TOPS,
+    }
+}
+
 /// What an NPC has noticed of one person, or of a place.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Notice<W> {
@@ -163,11 +195,17 @@ pub struct Notice<W> {
     pub heard: Option<u32>,
     /// For a place: whose body was found there, if that is what it is.
     pub body: Option<W>,
+    /// How full the gauge may go now: [`tops_for`] how the NPC feels about
+    /// them, 1 for a place and for one a script raised the alarm about.
+    pub tops: f32,
     /// The tick anything last fed the gauge.
     fed: u32,
     /// The tick anything that may fill it past [`HEARING_TOPS`] last fed
     /// it: sight, a body, a script.
     fed_high: u32,
+    /// Whether a script raised the alarm about them: they may alarm it,
+    /// whoever they are, until it is calm again.
+    raised: bool,
 }
 
 impl<W> Notice<W> {
@@ -194,6 +232,14 @@ impl<W> Notice<W> {
     #[must_use]
     pub fn is_place(&self) -> bool {
         self.about.is_none()
+    }
+
+    /// Whether it may go past curious: a place, an enemy, or one a script
+    /// raised the alarm about. What the body turns to, and what the marks
+    /// over NPCs show.
+    #[must_use]
+    pub fn may_alarm(&self) -> bool {
+        self.tops > CURIOUS_TOPS
     }
 }
 
@@ -232,10 +278,10 @@ pub struct Pace<W> {
 /// How a gauge is fed.
 #[derive(Clone, Copy, PartialEq)]
 enum Feed {
-    /// By sight, up to `tops`.
-    Sight(f32),
-    /// By hearing, up to `tops`.
-    Hearing(f32),
+    /// By sight.
+    Sight,
+    /// By hearing.
+    Hearing,
 }
 
 /// Everything one NPC has noticed, in storage of a fixed size.
@@ -243,17 +289,18 @@ enum Feed {
 pub struct Awareness<W> {
     people: [Option<Notice<W>>; MOST_NOTICED],
     place: Option<Notice<W>>,
-    /// The bodies it found, by who and the tick they went down, so the same
-    /// one does not alarm it twice.
-    bodies: [Option<(W, u32)>; MOST_BODIES],
+    /// The bodies it found, so the same one does not alarm it twice: who,
+    /// until it sees them on their feet again.
+    bodies: [Option<W>; MOST_BODIES],
     /// Where the next body found is remembered.
     next_body: usize,
-    /// The player, who always has a place and is never the one let go to
-    /// make room.
+    /// The player, who always has a place.
     player: Option<W>,
-    /// One let go to make room for the player while it was more than
-    /// unaware: told as calm at the next step.
-    dropped: Option<Change<W>>,
+    /// Those let go to make room while more than unaware: told as calm at
+    /// the next step.
+    dropped: [Option<Change<W>>; MOST_NOTICED],
+    /// How many ticks [`GRACE_SECONDS`] is, as of the last step.
+    grace: u32,
 }
 
 impl<W: Copy + PartialEq> Awareness<W> {
@@ -267,7 +314,8 @@ impl<W: Copy + PartialEq> Awareness<W> {
             bodies: [None; MOST_BODIES],
             next_body: 0,
             player,
-            dropped: None,
+            dropped: [None; MOST_NOTICED],
+            grace: 60,
         }
     }
 
@@ -306,11 +354,7 @@ impl<W: Copy + PartialEq> Awareness<W> {
     /// gauge; on a tie, a person before the place.
     #[must_use]
     pub fn highest(&self) -> Option<&Notice<W>> {
-        self.noticed()
-            .fold(None, |best: Option<&Notice<W>>, one| match best {
-                Some(best) if (best.level, best.gauge) >= (one.level, one.gauge) => Some(best),
-                _ => Some(one),
-            })
+        most_aware(self.noticed())
     }
 
     /// The highest level it is at, about anyone or anything.
@@ -319,31 +363,44 @@ impl<W: Copy + PartialEq> Awareness<W> {
         self.highest().map_or(Aware::Unaware, |n| n.level)
     }
 
-    /// What it turns to look toward: what it is most aware of, once that is
-    /// curious or more.
+    /// What it looks toward, head and chest: what it is most aware of, once
+    /// that is curious or more.
     #[must_use]
     pub fn interest(&self) -> Option<&Notice<W>> {
         self.highest().filter(|n| n.level >= Aware::Curious)
     }
 
-    /// Forgets everything, telling nothing: for an NPC whose health is
-    /// gone, or that was put somewhere new.
+    /// What it turns its whole body toward, as it stands: what it is most
+    /// aware of among those that may alarm it ([`Notice::may_alarm`]),
+    /// once that is curious or more. A neutral it is curious about is
+    /// only looked at.
+    #[must_use]
+    pub fn turns_to(&self) -> Option<&Notice<W>> {
+        most_aware(self.noticed().filter(|n| n.may_alarm())).filter(|n| n.level >= Aware::Curious)
+    }
+
+    /// Forgets everything it noticed, telling nothing: for an NPC whose
+    /// health is gone, or that was put somewhere new. The bodies it found
+    /// it still knows of, so one found before does not alarm it again.
     pub fn forget(&mut self) {
+        let (bodies, next_body) = (self.bodies, self.next_body);
         *self = Self::new(self.player);
+        self.bodies = bodies;
+        self.next_body = next_body;
     }
 
     /// One tick: fills each gauge by what `senses` says now, drains those
     /// nothing fed, and moves the levels, telling each change to `tell`.
-    /// `wary` says whether one may alarm the NPC (see the module's notes):
-    /// the world asks its table of sides.
+    /// `feels` says how the NPC feels about someone, which caps their gauge
+    /// (see the module's notes): the world asks its table of sides.
     pub fn step<N: Copy>(
         &mut self,
         senses: &Senses<W, N>,
         pace: &Pace<W>,
-        wary: impl FnMut(W) -> bool,
+        feels: impl FnMut(W) -> Feeling,
         tell: impl FnMut(Change<W>),
     ) {
-        self.take_in(senses.in_view(), senses.heard(), pace, wary, tell);
+        self.take_in(senses.in_view(), senses.heard(), pace, feels, tell);
     }
 
     /// [`step`](Self::step) with those in view and the noises lately heard
@@ -353,12 +410,21 @@ impl<W: Copy + PartialEq> Awareness<W> {
         in_view: impl Iterator<Item = &'a Sighting<W>>,
         heard: impl Iterator<Item = &'a Heard<W, N>>,
         pace: &Pace<W>,
-        mut wary: impl FnMut(W) -> bool,
+        mut feels: impl FnMut(W) -> Feeling,
         mut tell: impl FnMut(Change<W>),
     ) where
         W: 'a,
     {
         let tick = pace.tick;
+        if pace.seconds > 0.0 {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a second is a few hundred ticks at most"
+            )]
+            let grace = (GRACE_SECONDS / pace.seconds).round().min(1e6) as u32;
+            self.grace = grace;
+        }
         let scale = |who: Option<W>| {
             let player = if who.is_some() && who == pace.player {
                 pace.player_scale.max(0.0)
@@ -368,46 +434,96 @@ impl<W: Copy + PartialEq> Awareness<W> {
             pace.alertness.max(0.0) * player
         };
         for seen in in_view.filter(|seen| seen.in_view) {
+            let feeling = feels(seen.who);
             if seen.down_since.is_some() {
-                if !wary(seen.who) {
-                    self.found_body(seen.who, seen.down_since.unwrap_or(tick), seen.at, tick);
+                if feeling != Feeling::Enemy {
+                    self.found_body(seen.who, seen.at, tick);
                 }
                 continue;
             }
+            self.up_again(seen.who);
             let strength = seen.strength.clamp(0.0, 1.0);
-            let fill = SIGHT_FILL * strength * strength * scale(Some(seen.who)) * pace.seconds;
-            let tops = if wary(seen.who) { 1.0 } else { CALM_TOPS };
-            self.feed(Some(seen.who), fill, seen.at, Feed::Sight(tops), tick);
+            let first = if seen.seen == seen.since {
+                FIRST_LOOK
+            } else {
+                1.0
+            };
+            let fill =
+                SIGHT_FILL * strength * strength * first * scale(Some(seen.who)) * pace.seconds;
+            let tops = tops_for(feeling);
+            self.feed(Some(seen.who), fill, 0.0, seen.at, Feed::Sight, tops, tick);
         }
         for heard in heard.filter(|h| h.tick == tick && !h.of_world) {
             let weapon = if heard.weapon { WEAPON_HEARD } else { 1.0 };
             let fill = HEARING_FILL * heard.strength * weapon * scale(heard.by);
-            match heard.by {
-                // The noises of those it is not wary of go unremarked.
-                Some(by) if !wary(by) => {}
-                Some(by) => self.feed(Some(by), fill, heard.at, Feed::Hearing(HEARING_TOPS), tick),
-                None => self.feed(None, fill, heard.at, Feed::Hearing(HEARING_TOPS), tick),
+            // A weapon's noise, heard at all, makes it curious at once, and
+            // searching when it came through no wall or was loud.
+            let least = if !heard.weapon {
+                0.0
+            } else if !heard.walled || heard.strength >= WEAPON_NEAR {
+                SEARCHING_AT
+            } else {
+                CURIOUS_AT
+            };
+            let enemy = heard.by.filter(|&by| feels(by) == Feeling::Enemy);
+            match (enemy, heard.by) {
+                (Some(by), _) => self.feed(
+                    Some(by),
+                    fill,
+                    least,
+                    heard.at,
+                    Feed::Hearing,
+                    HEARING_TOPS,
+                    tick,
+                ),
+                // The noises of those it is no enemy of go unremarked, but
+                // not a weapon's: that is an interest in where it was.
+                (None, Some(_)) if !heard.weapon => {}
+                (None, _) => self.feed(
+                    None,
+                    fill,
+                    least,
+                    heard.at,
+                    Feed::Hearing,
+                    HEARING_TOPS,
+                    tick,
+                ),
             }
         }
-        if let Some(gone) = self.dropped.take() {
-            tell(gone);
+        for gone in &mut self.dropped {
+            if let Some(gone) = gone.take() {
+                tell(gone);
+            }
         }
-        let drain = DRAIN * pace.seconds;
-        let grace = GRACE_SECONDS;
-        let quiet = |since: u32| tick.wrapping_sub(since) as f32 * pace.seconds > grace;
+        let quiet = |since: u32| tick.wrapping_sub(since) as f32 * pace.seconds > GRACE_SECONDS;
         for slot in self
             .people
             .iter_mut()
             .chain(std::iter::once(&mut self.place))
         {
             let Some(notice) = slot else { continue };
+            if let Some(who) = notice.about {
+                notice.tops = if notice.raised {
+                    ALARMED_AT
+                } else {
+                    tops_for(feels(who))
+                };
+            }
             let held_by = if notice.gauge > HEARING_TOPS {
                 notice.fed_high
             } else {
                 notice.fed
             };
-            if quiet(held_by) {
-                notice.gauge = (notice.gauge - drain).max(0.0);
+            if notice.gauge > notice.tops {
+                // Fuller than it may be (an enemy forgiven): down to it.
+                notice.gauge = (notice.gauge - QUICK_DRAIN * pace.seconds).max(notice.tops);
+            } else if quiet(held_by) {
+                let drain = if notice.may_alarm() {
+                    DRAIN
+                } else {
+                    QUICK_DRAIN
+                };
+                notice.gauge = (notice.gauge - drain * pace.seconds).max(0.0);
             }
             let before = notice.level;
             let rising = Aware::rising_to(notice.gauge);
@@ -425,39 +541,58 @@ impl<W: Copy + PartialEq> Awareness<W> {
                     before,
                 });
             }
-            if notice.level == Aware::Unaware && notice.gauge <= 0.0 {
-                *slot = None;
+            if notice.level == Aware::Unaware {
+                notice.raised = false;
+                if notice.gauge <= 0.0 {
+                    *slot = None;
+                }
             }
         }
     }
 
-    /// Fills the gauge of `about` (a place when `None`) by `fill`, no
-    /// further than the feed allows, as sensed at `at` on `tick`.
-    fn feed(&mut self, about: Option<W>, fill: f32, at: [f32; 3], how: Feed, tick: u32) {
+    /// Fills the gauge of `about` (a place when `None`) by `fill`, to at
+    /// least `least`, no further than `tops`, as sensed at `at` on `tick`.
+    #[allow(clippy::too_many_arguments, reason = "one private helper")]
+    fn feed(
+        &mut self,
+        about: Option<W>,
+        fill: f32,
+        least: f32,
+        at: [f32; 3],
+        how: Feed,
+        tops: f32,
+        tick: u32,
+    ) {
         let fill = if fill.is_finite() { fill.max(0.0) } else { 0.0 };
-        let Some(notice) = self.slot_for(about, fill, at, tick) else {
+        let may_alarm = about.is_none() || tops > CURIOUS_TOPS;
+        let Some(notice) = self.slot_for(about, fill.max(least), may_alarm, at, tick) else {
             return;
-        };
-        let tops = match how {
-            Feed::Sight(tops) | Feed::Hearing(tops) => tops,
         };
         // A body found is not forgotten for a noise elsewhere.
         if about.is_none() && notice.body.is_some() && notice.gauge > HEARING_TOPS {
             return;
         }
+        let tops = if notice.raised || about.is_none() {
+            match how {
+                Feed::Sight => ALARMED_AT,
+                Feed::Hearing => HEARING_TOPS,
+            }
+        } else {
+            tops
+        };
         if notice.gauge < tops {
-            notice.gauge = (notice.gauge + fill).min(tops);
+            notice.gauge = (notice.gauge + fill).max(least).min(tops);
         }
         notice.at = at;
         notice.fed = tick;
         match how {
-            Feed::Sight(tops) => {
+            Feed::Sight => {
                 notice.seen = Some(tick);
                 if tops > HEARING_TOPS {
                     notice.fed_high = tick;
                 }
             }
-            Feed::Hearing(_) => {
+            Feed::Hearing => {
                 notice.heard = Some(tick);
                 if about.is_none() {
                     notice.body = None;
@@ -467,12 +602,13 @@ impl<W: Copy + PartialEq> Awareness<W> {
     }
 
     /// The gauge of `about`, made if there is none: in an empty place, or
-    /// in place of the one noticed least (never the player, nor one
-    /// noticed more than `fill`). `None` when there is no room.
+    /// in place of one who gives way to it (see [`MOST_NOTICED`]). `None`
+    /// when there is no room. `may_alarm` says whether `about` may.
     fn slot_for(
         &mut self,
         about: Option<W>,
         fill: f32,
+        may_alarm: bool,
         at: [f32; 3],
         tick: u32,
     ) -> Option<&mut Notice<W>> {
@@ -485,8 +621,10 @@ impl<W: Copy + PartialEq> Awareness<W> {
             seen: None,
             heard: None,
             body: None,
+            tops: if may_alarm { ALARMED_AT } else { CURIOUS_TOPS },
             fed: tick,
             fed_high: tick,
+            raised: false,
         };
         let Some(who) = about else {
             return Some(self.place.get_or_insert(fresh));
@@ -498,22 +636,16 @@ impl<W: Copy + PartialEq> Awareness<W> {
         {
             return self.people[at].as_mut();
         }
-        let room = if let Some(empty) = self.people.iter().position(Option::is_none) {
-            Some(empty)
-        } else {
-            let player = self.player.is_some() && Some(who) == self.player;
-            self.least().filter(|&slot| {
-                // Only one still unaware is let go, so no level a script
-                // was told of vanishes untold; the player takes any.
-                self.people[slot]
-                    .is_some_and(|n| player || (n.level == Aware::Unaware && n.gauge < fill))
-            })
+        let room = match self.people.iter().position(Option::is_none) {
+            Some(empty) => Some(empty),
+            None => self.gives_way(Some(who) == self.player, may_alarm, fill, tick),
         };
         let slot = room?;
         if let Some(gone) = self.people[slot]
             && gone.level != Aware::Unaware
+            && let Some(free) = self.dropped.iter_mut().find(|d| d.is_none())
         {
-            self.dropped = Some(Change {
+            *free = Some(Change {
                 about: gone.about,
                 at: gone.at,
                 now: Aware::Unaware,
@@ -524,28 +656,41 @@ impl<W: Copy + PartialEq> Awareness<W> {
         self.people[slot].as_mut()
     }
 
-    /// The place of the one noticed least, the player aside: the lowest
-    /// level, then the emptiest gauge.
-    fn least(&self) -> Option<usize> {
-        (0..MOST_NOTICED)
+    /// The place of the one who gives way to a newcomer (the player when
+    /// `player`; one who may alarm the NPC when `may_alarm`) filling its
+    /// gauge by `fill` on `tick`, if anyone does: see [`MOST_NOTICED`].
+    /// The player never gives way.
+    fn gives_way(&self, player: bool, may_alarm: bool, fill: f32, tick: u32) -> Option<usize> {
+        let unsensed = |n: &Notice<W>| n.sensed().map_or(u32::MAX, |t| tick.wrapping_sub(t));
+        let (slot, n) = (0..MOST_NOTICED)
             .filter_map(|slot| self.people[slot].map(|n| (slot, n)))
             .filter(|(_, n)| self.player.is_none() || n.about != self.player)
-            .min_by(|(_, a), (_, b)| (a.level.cmp(&b.level)).then(a.gauge.total_cmp(&b.gauge)))
-            .map(|(slot, _)| slot)
+            .min_by(|(_, a), (_, b)| {
+                (a.may_alarm().cmp(&b.may_alarm()))
+                    .then(a.level.cmp(&b.level))
+                    .then(a.gauge.total_cmp(&b.gauge))
+                    .then(unsensed(b).cmp(&unsensed(a)))
+            })?;
+        let lately = |n: &Notice<W>| unsensed(n) <= self.grace;
+        let gives = if player {
+            true
+        } else if n.may_alarm() {
+            // An enemy gives way to an enemy only while it is not alarming
+            // the NPC and was not sensed a moment ago.
+            may_alarm && n.level < Aware::Alarmed && !lately(&n)
+        } else {
+            may_alarm || (n.level == Aware::Unaware && n.gauge < fill)
+        };
+        gives.then_some(slot)
     }
 
     /// A body found lying there: an alarm about the place, unless it is
     /// one already found.
-    fn found_body(&mut self, who: W, down_since: u32, at: [f32; 3], tick: u32) {
-        if self
-            .bodies
-            .iter()
-            .flatten()
-            .any(|&k| k == (who, down_since))
-        {
+    fn found_body(&mut self, who: W, at: [f32; 3], tick: u32) {
+        if self.bodies.iter().flatten().any(|&k| k == who) {
             return;
         }
-        self.bodies[self.next_body % MOST_BODIES] = Some((who, down_since));
+        self.bodies[self.next_body % MOST_BODIES] = Some(who);
         self.next_body = (self.next_body + 1) % MOST_BODIES;
         self.raise(None, at, tick);
         if let Some(place) = &mut self.place {
@@ -554,14 +699,27 @@ impl<W: Copy + PartialEq> Awareness<W> {
         }
     }
 
+    /// One seen on their feet: should they lie there again, that is a body
+    /// found anew.
+    fn up_again(&mut self, who: W) {
+        for body in &mut self.bodies {
+            if *body == Some(who) {
+                *body = None;
+            }
+        }
+    }
+
     /// Raises the alarm about `about` (a place when `None`) at `at`, as a
     /// script's `npc:alert` does or a body found: the gauge is full, and
-    /// the level rises to alarmed at the next step.
+    /// the level rises to alarmed at the next step. Whoever they are, they
+    /// may alarm it until it is calm again.
     pub fn raise(&mut self, about: Option<W>, at: [f32; 3], tick: u32) {
-        let Some(notice) = self.slot_for(about, f32::INFINITY, at, tick) else {
+        let Some(notice) = self.slot_for(about, f32::INFINITY, true, at, tick) else {
             return;
         };
         notice.gauge = 1.0;
+        notice.tops = ALARMED_AT;
+        notice.raised = true;
         notice.at = at;
         notice.fed = tick;
         notice.fed_high = tick;
@@ -596,6 +754,15 @@ impl<W: Copy + PartialEq> Awareness<W> {
     }
 }
 
+/// The one of `noticed` it is most aware of: the highest level, then the
+/// fullest gauge; on a tie, the first.
+fn most_aware<'a, W: 'a>(noticed: impl Iterator<Item = &'a Notice<W>>) -> Option<&'a Notice<W>> {
+    noticed.fold(None, |best: Option<&Notice<W>>, one| match best {
+        Some(best) if (best.level, best.gauge) >= (one.level, one.gauge) => Some(best),
+        _ => Some(one),
+    })
+}
+
 /// Empties `slot`, telling `tell` if it was more than unaware.
 fn settle<W: Copy>(slot: &mut Option<Notice<W>>, _tick: u32, mut tell: impl FnMut(Change<W>)) {
     if let Some(notice) = slot.take()
@@ -609,7 +776,6 @@ fn settle<W: Copy>(slot: &mut Option<Notice<W>>, _tick: u32, mut tell: impl FnMu
         });
     }
 }
-
 /// The way to face, `facing` turned toward `goal` by at most `most`
 /// radians, the short way round: both in radians, turning left from -Z.
 #[must_use]
@@ -650,6 +816,17 @@ mod tests {
 
     const TICK: f32 = 1.0 / 60.0;
     const PLAYER: u32 = 0;
+    /// Who is under 100 is an enemy, under 200 a neutral, else a friend.
+    const NEUTRAL: u32 = 150;
+    const FRIEND: u32 = 200;
+
+    fn feels(who: u32) -> Feeling {
+        match who {
+            0..100 => Feeling::Enemy,
+            100..200 => Feeling::Neutral,
+            _ => Feeling::Friend,
+        }
+    }
 
     fn pace(tick: u32) -> Pace<u32> {
         Pace {
@@ -661,15 +838,21 @@ mod tests {
         }
     }
 
+    /// `who` in view since tick 0, looked at every twelve ticks.
     fn seen(who: u32, strength: f32, tick: u32) -> Sighting<u32> {
+        seen_from(who, strength, tick, 0)
+    }
+
+    /// `who` in view since `from`, looked at every twelve ticks from then.
+    fn seen_from(who: u32, strength: f32, tick: u32, from: u32) -> Sighting<u32> {
         Sighting {
             who,
             strength,
             in_view: true,
             down_since: None,
             at: [1.0, 0.0, 2.0],
-            seen: tick,
-            since: 0,
+            seen: tick - (tick - from) % 12,
+            since: from,
         }
     }
 
@@ -699,20 +882,25 @@ mod tests {
     ) {
         for tick in from..from + ticks {
             let (s, n) = (sights(tick), noises(tick));
-            aware.take_in(
-                s.iter(),
-                n.iter(),
-                &pace(tick),
-                |who| who < 100,
-                |c| {
-                    changes.push((tick, c));
-                },
-            );
+            aware.take_in(s.iter(), n.iter(), &pace(tick), feels, |c| {
+                changes.push((tick, c));
+            });
         }
     }
 
     fn first(changes: &[(u32, Change<u32>)], now: Aware) -> Option<u32> {
         changes.iter().find(|(_, c)| c.now == now).map(|(t, _)| *t)
+    }
+
+    /// The tick a gauge seen at `strength` from tick 0 reaches `gauge`:
+    /// the first look's twelve ticks count half.
+    fn expected(gauge: f32, strength: f32) -> f32 {
+        let rate = SIGHT_FILL * strength * strength;
+        (0.1 + gauge / rate) * 60.0
+    }
+
+    fn near(tick: u32, want: f32) -> bool {
+        (tick as f32 - want).abs() <= 2.0
     }
 
     #[test]
@@ -722,17 +910,17 @@ mod tests {
         run(
             &mut aware,
             0,
-            200,
+            600,
             |t| vec![seen(PLAYER, 0.3, t)],
             |_| vec![],
             &mut changes,
         );
-        // 0.25 / (5 * 0.09) = 0.56 s; 1 / 0.45 = 2.2 s.
         let curious = first(&changes, Aware::Curious).unwrap();
         let alarmed = first(&changes, Aware::Alarmed).unwrap();
-        assert!((33..=35).contains(&curious), "{curious}");
-        assert!((132..=135).contains(&alarmed), "{alarmed}");
-        // Plain view, close: at once.
+        assert!(near(curious, expected(CURIOUS_AT, 0.3)), "{curious}");
+        assert!(near(alarmed, expected(1.0, 0.3)), "{alarmed}");
+        // Plain view, close: noticed at once, curious in a quarter of a
+        // second and alarmed in 0.7.
         let mut aware = Awareness::new(Some(PLAYER));
         let mut changes = Vec::new();
         run(
@@ -744,7 +932,54 @@ mod tests {
             &mut changes,
         );
         assert_eq!(changes.len(), 3, "{changes:?}");
-        assert!(first(&changes, Aware::Alarmed).unwrap() <= 12);
+        assert!(first(&changes, Aware::Curious).unwrap() <= 16);
+        assert!(near(first(&changes, Aware::Alarmed).unwrap(), 41.3));
+    }
+
+    #[test]
+    fn the_worked_cases_a_sprint_far_off_is_searched_for_and_one_standing_near_alarms() {
+        // Sprinting across the middle of a guard's view 20 metres off in
+        // day for a second and a half: seen at 0.6.
+        let mut aware = Awareness::new(Some(PLAYER));
+        let mut changes = Vec::new();
+        run(
+            &mut aware,
+            0,
+            90,
+            |t| vec![seen(PLAYER, 0.601, t)],
+            |_| vec![],
+            &mut changes,
+        );
+        assert_eq!(aware.level_of(PLAYER), Aware::Searching, "{changes:?}");
+        // Standing still in plain view 5 metres off: seen at 0.75, alarmed
+        // in about a second.
+        let mut aware = Awareness::new(Some(PLAYER));
+        let mut changes = Vec::new();
+        run(
+            &mut aware,
+            0,
+            120,
+            |t| vec![seen(PLAYER, 0.747, t)],
+            |_| vec![],
+            &mut changes,
+        );
+        let alarmed = first(&changes, Aware::Alarmed).unwrap();
+        assert!((60..=75).contains(&alarmed), "{alarmed}");
+        // Seen clearly at one look and gone by the next: the gap counts
+        // half, so not even curious.
+        let mut aware = Awareness::new(Some(PLAYER));
+        let mut changes = Vec::new();
+        run(
+            &mut aware,
+            0,
+            12,
+            |t| vec![seen(PLAYER, 1.0, t)],
+            |_| vec![],
+            &mut changes,
+        );
+        run(&mut aware, 12, 60, |_| vec![], |_| vec![], &mut changes);
+        assert!(changes.is_empty(), "{changes:?}");
+        assert!((aware.gauge_of(PLAYER) - SIGHT_FILL * 0.1).abs() < 1e-4);
     }
 
     #[test]
@@ -754,13 +989,13 @@ mod tests {
         run(
             &mut aware,
             0,
-            30,
+            60,
             |t| vec![seen(PLAYER, 1.0, t)],
             |_| vec![],
             &mut changes,
         );
         assert_eq!(aware.level_of(PLAYER), Aware::Alarmed);
-        let lost = 30;
+        let lost = 60;
         changes.clear();
         run(
             &mut aware,
@@ -780,22 +1015,9 @@ mod tests {
             ]
         );
         let secs = |t: u32| (t - lost) as f32 * TICK;
-        assert!(
-            (secs(changes[0].0) - 4.75).abs() < 0.1,
-            "{}",
-            secs(changes[0].0)
-        );
-        assert!(
-            (secs(changes[1].0) - 16.0).abs() < 0.1,
-            "{}",
-            secs(changes[1].0)
-        );
-        assert!(
-            (secs(changes[2].0) - 23.5).abs() < 0.1,
-            "{}",
-            secs(changes[2].0)
-        );
-        // Where to look stays where they were last seen, and when.
+        for (change, want) in changes.iter().zip([4.75, 16.0, 23.5]) {
+            assert!((secs(change.0) - want).abs() < 0.1, "{}", secs(change.0));
+        }
         assert!(aware.of(PLAYER).is_none(), "forgotten once calm and empty");
     }
 
@@ -803,14 +1025,14 @@ mod tests {
     fn the_level_does_not_flicker_at_a_boundary() {
         let mut aware = Awareness::new(Some(PLAYER));
         let mut changes = Vec::new();
-        // Seen just long enough to be curious, then glimpsed on and off.
+        // Glimpsed on and off.
         run(
             &mut aware,
             0,
-            600,
+            1200,
             |t| {
                 if t % 120 < 40 {
-                    vec![seen(PLAYER, 0.3, t)]
+                    vec![seen_from(PLAYER, 0.6, t, t - t % 120)]
                 } else {
                     vec![]
                 }
@@ -818,6 +1040,7 @@ mod tests {
             |_| vec![],
             &mut changes,
         );
+        assert!(first(&changes, Aware::Curious).is_some());
         let flips = changes.iter().filter(|(_, c)| c.now < c.before).count();
         assert_eq!(flips, 0, "{changes:?}");
     }
@@ -850,18 +1073,7 @@ mod tests {
             "searching goes where it was heard"
         );
         assert!(notice.seen.is_none() && notice.heard == Some(590));
-        // A shot nearby is searching at once; a footstep a few metres off only
-        // adds a little.
-        let mut aware = Awareness::new(Some(PLAYER));
-        run(
-            &mut aware,
-            0,
-            1,
-            |_| vec![],
-            |t| vec![heard(Some(PLAYER), 0.5, t, true)],
-            &mut changes,
-        );
-        assert_eq!(aware.level_of(PLAYER), Aware::Searching);
+        // A footstep a few metres off only adds a little.
         let mut aware = Awareness::new(Some(PLAYER));
         run(
             &mut aware,
@@ -873,6 +1085,25 @@ mod tests {
         );
         assert_eq!(aware.level_of(PLAYER), Aware::Unaware);
         assert!((aware.gauge_of(PLAYER) - 0.12).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_weapon_heard_at_all_makes_it_curious_and_in_the_open_or_near_searching() {
+        let once = |strength: f32, walled: bool| {
+            let mut aware = Awareness::new(Some(PLAYER));
+            let mut shot = heard(Some(PLAYER), strength, 0, true);
+            shot.walled = walled;
+            aware.take_in(std::iter::empty(), [shot].iter(), &pace(0), feels, |_| {});
+            aware.level_of(PLAYER)
+        };
+        // Thirty metres off behind a wall, faint: curious at once.
+        assert_eq!(once(0.046, true), Aware::Curious);
+        // Thirty metres off in the open: searching.
+        assert_eq!(once(0.133, false), Aware::Searching);
+        // Behind a wall but near: searching.
+        assert_eq!(once(WEAPON_NEAR, true), Aware::Searching);
+        // And never alarmed without sight.
+        assert_eq!(once(1.0, false), Aware::Searching);
     }
 
     #[test]
@@ -888,47 +1119,158 @@ mod tests {
             &mut changes,
         );
         let place = aware.place().unwrap();
-        assert!(place.is_place());
+        assert!(place.is_place() && place.may_alarm());
         assert_eq!(place.level, Aware::Searching);
         assert_eq!(changes[0].1.about, None);
         assert_eq!(aware.interest().unwrap().at, [5.0, 0.0, 5.0]);
+        assert_eq!(aware.turns_to().unwrap().at, [5.0, 0.0, 5.0]);
     }
 
     #[test]
-    fn one_it_is_not_wary_of_is_noticed_never_alarming() {
-        let friend = 200;
+    fn a_friend_is_noticed_and_its_noises_unremarked_but_not_its_shots() {
         let mut aware = Awareness::new(Some(PLAYER));
         let mut changes = Vec::new();
         run(
             &mut aware,
             0,
             600,
-            |t| vec![seen(friend, 1.0, t)],
-            |t| vec![heard(Some(friend), 1.0, t, true)],
+            |t| vec![seen(FRIEND, 1.0, t)],
+            |t| vec![heard(Some(FRIEND), 1.0, t, false)],
             &mut changes,
         );
         assert!(changes.is_empty(), "{changes:?}");
-        assert_eq!(aware.level_of(friend), Aware::Unaware);
-        assert!((aware.gauge_of(friend) - CALM_TOPS).abs() < 1e-6);
-        assert!(aware.interest().is_none());
+        assert_eq!(aware.level_of(FRIEND), Aware::Unaware);
+        assert!((aware.gauge_of(FRIEND) - CALM_TOPS).abs() < 1e-6);
+        assert!(aware.interest().is_none() && !aware.of(FRIEND).unwrap().may_alarm());
+        // A shot it fires is an interest in where it was fired, not in it.
+        run(
+            &mut aware,
+            600,
+            1,
+            |t| vec![seen(FRIEND, 1.0, t)],
+            |t| vec![heard(Some(FRIEND), 0.5, t, true)],
+            &mut changes,
+        );
+        assert_eq!(aware.place().unwrap().level, Aware::Searching);
+        assert_eq!(aware.level_of(FRIEND), Aware::Unaware);
+    }
+
+    #[test]
+    fn a_neutral_is_at_most_a_curiosity_looked_at_and_soon_forgotten() {
+        let mut aware = Awareness::new(Some(PLAYER));
+        let mut changes = Vec::new();
+        run(
+            &mut aware,
+            0,
+            600,
+            |t| vec![seen(NEUTRAL, 1.0, t)],
+            |t| vec![heard(Some(NEUTRAL), 1.0, t, false)],
+            &mut changes,
+        );
+        assert_eq!(aware.level_of(NEUTRAL), Aware::Curious);
+        assert!((aware.gauge_of(NEUTRAL) - CURIOUS_TOPS).abs() < 1e-6);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        // Looked at, head and chest; the body does not turn to it.
+        assert_eq!(aware.interest().unwrap().about, Some(NEUTRAL));
+        assert!(aware.turns_to().is_none());
+        // Gone from view: calm three seconds later.
+        changes.clear();
+        run(&mut aware, 600, 300, |_| vec![], |_| vec![], &mut changes);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        let calm = (changes[0].0 - 600) as f32 * TICK;
+        assert!((calm - 3.0).abs() < 0.1, "{calm}");
+    }
+
+    #[test]
+    fn a_neutral_who_becomes_an_enemy_is_noticed_on_from_where_it_was() {
+        let mut aware = Awareness::new(Some(PLAYER));
+        let mut changes = Vec::new();
+        run(
+            &mut aware,
+            0,
+            300,
+            |t| vec![seen(NEUTRAL, 1.0, t)],
+            |_| vec![],
+            &mut changes,
+        );
+        let mut grudge = |who: u32| {
+            if who == NEUTRAL {
+                Feeling::Enemy
+            } else {
+                feels(who)
+            }
+        };
+        let s = [seen(NEUTRAL, 1.0, 300)];
+        aware.take_in(
+            s.iter(),
+            std::iter::empty::<&Heard<u32>>(),
+            &pace(300),
+            &mut grudge,
+            |_| {},
+        );
+        let after = aware.gauge_of(NEUTRAL);
+        assert!(
+            after > CURIOUS_TOPS && after < CURIOUS_TOPS + 0.05,
+            "{after}"
+        );
+        assert!(aware.of(NEUTRAL).unwrap().may_alarm());
+        let mut level = Aware::Unaware;
+        for tick in 301..340 {
+            let s = [seen(NEUTRAL, 1.0, tick)];
+            aware.take_in(
+                s.iter(),
+                std::iter::empty::<&Heard<u32>>(),
+                &pace(tick),
+                &mut grudge,
+                |_| {},
+            );
+            level = aware.level_of(NEUTRAL);
+        }
+        assert_eq!(level, Aware::Alarmed);
     }
 
     #[test]
     fn a_body_found_is_an_alarm_about_its_place_once() {
-        let friend = 200;
-        let mut body = seen(friend, 0.5, 0);
+        let mut body = seen(FRIEND, 0.5, 0);
         body.down_since = Some(0);
         let mut aware = Awareness::new(Some(PLAYER));
         let mut changes = Vec::new();
         run(&mut aware, 1, 1, |_| vec![body], |_| vec![], &mut changes);
         let place = aware.place().unwrap();
-        assert_eq!((place.level, place.body), (Aware::Alarmed, Some(friend)));
-        assert_eq!(aware.level_of(friend), Aware::Unaware);
+        assert_eq!((place.level, place.body), (Aware::Alarmed, Some(FRIEND)));
+        assert_eq!(aware.level_of(FRIEND), Aware::Unaware);
         // Calmed by a script, the same body still in view does not alarm it
         // again.
         aware.calm_all(2, |c| changes.push((2, c)));
         run(&mut aware, 3, 60, |_| vec![body], |_| vec![], &mut changes);
         assert!(aware.place().is_none());
+        // Passed again on a later round, the senses having forgotten it
+        // (it is found anew, on a new tick): still not again.
+        let mut again = body;
+        again.down_since = Some(5000);
+        let told = changes.len();
+        run(
+            &mut aware,
+            5000,
+            30,
+            |_| vec![again],
+            |_| vec![],
+            &mut changes,
+        );
+        assert_eq!(changes.len(), told, "{changes:?}");
+        // Seen on their feet, and down again: that is a new body.
+        let mut up = body;
+        up.down_since = None;
+        run(&mut aware, 5030, 1, |_| vec![up], |_| vec![], &mut changes);
+        run(
+            &mut aware,
+            5031,
+            1,
+            |_| vec![again],
+            |_| vec![],
+            &mut changes,
+        );
+        assert_eq!(aware.place().unwrap().level, Aware::Alarmed);
         // An enemy's body alarms nobody.
         let mut enemy = seen(7, 0.5, 0);
         enemy.down_since = Some(0);
@@ -949,7 +1291,7 @@ mod tests {
                     s.iter(),
                     std::iter::empty::<&Heard<u32>>(),
                     &pace,
-                    |_| true,
+                    |_| Feeling::Enemy,
                     |_| {},
                 );
                 if aware.level_of(who) == Aware::Alarmed {
@@ -958,24 +1300,26 @@ mod tests {
             }
             u32::MAX
         };
-        // 1 / (5 * 0.09 * scale) seconds.
-        assert!((265..=268).contains(&ticks_to_alarm(PLAYER, 0.5)));
-        assert!((132..=135).contains(&ticks_to_alarm(PLAYER, 1.0)));
-        assert!((88..=90).contains(&ticks_to_alarm(PLAYER, 1.5)));
+        // 0.1 + 1 / (1.7 * 0.09 * scale) seconds.
+        for scale in [0.5, 1.0, 1.5] {
+            let want = (0.1 + 1.0 / (SIGHT_FILL * 0.09 * scale)) * 60.0;
+            let got = ticks_to_alarm(PLAYER, scale);
+            assert!((got as f32 - want).abs() <= 3.0, "{scale} {got} {want}");
+        }
         assert_eq!(ticks_to_alarm(5, 0.5), ticks_to_alarm(5, 1.5));
     }
 
     #[test]
     fn alertness_scales_every_fill() {
         let mut aware = Awareness::new(Some(PLAYER));
-        let s = [seen(5, 1.0, 0)];
-        let mut sleepy = pace(0);
+        let s = [seen(5, 1.0, 12)];
+        let mut sleepy = pace(12);
         sleepy.alertness = 0.5;
         aware.take_in(
             s.iter(),
             std::iter::empty::<&Heard<u32>>(),
             &sleepy,
-            |_| true,
+            feels,
             |_| {},
         );
         assert!((aware.gauge_of(5) - 0.5 * SIGHT_FILL * TICK).abs() < 1e-6);
@@ -985,22 +1329,18 @@ mod tests {
     fn the_player_always_has_a_place_when_more_are_noticed_than_there_is_room_for() {
         let mut aware = Awareness::new(Some(PLAYER));
         let mut changes = Vec::new();
-        // Ten strangers fill every place, then the player is heard.
+        // Ten enemies fill every place, then the player is heard.
         run(
             &mut aware,
             0,
             20,
-            |t| {
-                (1..=10)
-                    .map(|who| seen(who, 0.2 + who as f32 * 0.05, t))
-                    .collect()
-            },
+            |t| (1..=10).map(|who| seen(who, 0.5, t)).collect(),
             |_| vec![],
             &mut changes,
         );
         assert_eq!(aware.noticed().count(), MOST_NOTICED);
         assert!(
-            aware.of(1).is_none() && aware.of(2).is_none(),
+            aware.of(9).is_none() && aware.of(10).is_none(),
             "the first come keep their place"
         );
         run(
@@ -1013,7 +1353,7 @@ mod tests {
         );
         assert!(aware.of(PLAYER).is_some());
         assert_eq!(aware.noticed().count(), MOST_NOTICED);
-        // No stranger takes it again while it is not forgotten.
+        // No one takes it again while it is not forgotten.
         run(
             &mut aware,
             21,
@@ -1023,6 +1363,61 @@ mod tests {
             &mut changes,
         );
         assert!(aware.of(PLAYER).is_some());
+    }
+
+    /// A guard among `crowd` townsfolk (neutrals and friends) it has looked
+    /// at a while; then `enemy` walks into view. It is alarmed by them in
+    /// as long as alone, and no townsperson is told twice.
+    fn among_townsfolk(crowd: u32, enemy: u32) {
+        let mut aware = Awareness::new(Some(PLAYER));
+        let mut changes = Vec::new();
+        let town = |t: u32| -> Vec<Sighting<u32>> {
+            (0..crowd)
+                .map(|i| {
+                    let who = if i % 2 == 0 { 100 + i } else { 200 + i };
+                    seen(who, 0.9, t)
+                })
+                .collect()
+        };
+        run(&mut aware, 0, 600, town, |_| vec![], &mut changes);
+        assert_eq!(aware.noticed().count(), MOST_NOTICED.min(crowd as usize));
+        assert!(aware.noticed().all(|n| n.level <= Aware::Curious));
+        let told = changes.len();
+        run(
+            &mut aware,
+            600,
+            600,
+            |t| {
+                let mut all = town(t);
+                all.push(seen_from(enemy, 0.9, t, 600));
+                all
+            },
+            |_| vec![],
+            &mut changes,
+        );
+        let alarmed = changes
+            .iter()
+            .find(|(_, c)| c.about == Some(enemy) && c.now == Aware::Alarmed)
+            .map(|(t, _)| t - 600);
+        let want = expected(1.0, 0.9);
+        assert!(
+            alarmed.is_some_and(|t| (t as f32 - want).abs() <= 2.0),
+            "{alarmed:?} {changes:?}"
+        );
+        // A townsperson let go is told so once, and is not taken back.
+        let town_told: Vec<_> = changes[told..]
+            .iter()
+            .filter(|(_, c)| c.about != Some(enemy))
+            .collect();
+        assert!(town_told.len() <= 1, "{town_told:?}");
+        assert!(town_told.iter().all(|(_, c)| c.now == Aware::Unaware));
+    }
+
+    #[test]
+    fn an_enemy_walking_into_a_crowd_of_townsfolk_always_has_a_place() {
+        among_townsfolk(8, 50);
+        among_townsfolk(12, 50);
+        among_townsfolk(12, PLAYER);
     }
 
     #[test]
@@ -1043,6 +1438,50 @@ mod tests {
         aware.calm_all(7, |c| changes.push((7, c)));
         assert_eq!(aware.level(), Aware::Unaware);
         assert_eq!(changes.len(), 4);
+        // About a neutral too: alarmed while they are in view, and searching
+        // once they have been gone as long as an enemy would be.
+        aware.raise(Some(NEUTRAL), [3.0, 0.0, 3.0], 10);
+        run(
+            &mut aware,
+            10,
+            120,
+            |t| vec![seen(NEUTRAL, 0.5, t)],
+            |_| vec![],
+            &mut changes,
+        );
+        assert_eq!(aware.level_of(NEUTRAL), Aware::Alarmed);
+        assert!(aware.turns_to().is_some());
+        changes.clear();
+        run(&mut aware, 130, 2000, |_| vec![], |_| vec![], &mut changes);
+        let fell = first(&changes, Aware::Searching).unwrap() - 130;
+        assert!((fell as f32 * TICK - 4.75).abs() < 0.1, "{fell}");
+        assert_eq!(aware.level_of(NEUTRAL), Aware::Unaware);
+    }
+
+    #[test]
+    fn calmed_while_an_enemy_is_in_view_it_is_alarmed_again_within_a_second() {
+        let mut aware = Awareness::new(Some(PLAYER));
+        let mut changes = Vec::new();
+        run(
+            &mut aware,
+            0,
+            60,
+            |t| vec![seen(PLAYER, 1.0, t)],
+            |_| vec![],
+            &mut changes,
+        );
+        aware.calm_all(60, |c| changes.push((60, c)));
+        changes.clear();
+        run(
+            &mut aware,
+            60,
+            60,
+            |t| vec![seen(PLAYER, 1.0, t)],
+            |_| vec![],
+            &mut changes,
+        );
+        let again = first(&changes, Aware::Alarmed).unwrap() - 60;
+        assert!(again <= 40, "{again}");
     }
 
     #[test]

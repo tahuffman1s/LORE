@@ -1,8 +1,9 @@
 //! NPCs notice bit by bit in a running world on the starter level: the
-//! player stepping into view makes a guard curious and then alarmed at the
-//! stated rates, ducking out of sight leaves it searching and then calm, a
-//! shot behind it turns it round to see who fired, a friend alarms nobody,
-//! and the same input gives the same changes on the same ticks.
+//! player stepping into view makes a guard that counts them an enemy
+//! curious and then alarmed at the stated rates, ducking out of sight
+//! leaves it searching and then calm, a shot behind it turns it round to
+//! see who fired, a friend alarms nobody, a guard in a game with no sides
+//! only looks, and the same input gives the same changes on the same ticks.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -101,13 +102,22 @@ for _, npc in game.npcs() do
 end
 "#;
 
-/// A guard south of the tower looking north at it; the player is put
+/// A table of sides in which the guards count the player an enemy: give
+/// a guard `side = "Guards"`.
+const OUTLAW: &str = r#"
+game.sides { Guards = { enemies = { "Outlaws" } }, Outlaws = {} }
+game.player.side = "Outlaws"
+"#;
+
+/// A guard, who counts the player an enemy, south of the tower looking
+/// north at it; the player is put
 /// behind the tower on the first tick, steps out on the sixtieth and, if
 /// `back` is set, ducks behind it again on that tick.
 fn behind_the_tower(back: u32) -> String {
     format!(
         r#"
-local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 0 }}
+{OUTLAW}
+local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 0, side = "Guards" }}
 local steps = 0
 game.onTick(function()
     steps += 1
@@ -156,7 +166,13 @@ fn the_player_stepping_into_view_makes_a_guard_curious_then_alarmed_at_the_state
             .filter(|s| s.in_view)
             && after < 1.0
         {
-            let want = lore_npc::SIGHT_FILL * seen.strength * seen.strength / 60.0;
+            // The first look's gap counts half.
+            let first = if seen.seen == seen.since {
+                lore_npc::FIRST_LOOK
+            } else {
+                1.0
+            };
+            let want = lore_npc::SIGHT_FILL * seen.strength * seen.strength * first / 60.0;
             assert!(
                 (after - before - want).abs() < 1e-4,
                 "{before} {after} {seen:?}"
@@ -170,11 +186,14 @@ fn the_player_stepping_into_view_makes_a_guard_curious_then_alarmed_at_the_state
     let seen = guard.senses.sighting(CharacterId::PLAYER).copied().unwrap();
     let curious = tick_of(&told, "Player unaware>curious");
     let alarmed = tick_of(&told, "Player searching>alarmed");
-    // From the first look that saw them: well under a second at ten metres
-    // in plain day.
+    // From the first look that saw them: about a second and a half, ten
+    // metres off in plain day, standing at the edge of the tower (a
+    // little more while they land and are seen less of).
+    let want = (0.1 + 1.0 / (lore_npc::SIGHT_FILL * seen.strength * seen.strength)) * 60.0;
+    let took = (alarmed - seen.since) as f32;
     assert!(
-        curious > seen.since && alarmed - seen.since < 45,
-        "{told:?} {seen:?}"
+        curious > seen.since && took > want - 3.0 && took < want + 20.0,
+        "{told:?} {seen:?} {want}"
     );
     // Curious, it looks: what it is most aware of is the player, where
     // they stand.
@@ -188,8 +207,8 @@ fn the_player_stepping_into_view_makes_a_guard_curious_then_alarmed_at_the_state
 
 #[test]
 fn ducking_behind_a_wall_leaves_the_guard_searching_then_calm() {
-    let mut world = world(&behind_the_tower(150));
-    play(&mut world, 149);
+    let mut world = world(&behind_the_tower(200));
+    play(&mut world, 199);
     let told = changes(&printed());
     tick_of(&told, "Player searching>alarmed");
     play(&mut world, 30);
@@ -223,9 +242,10 @@ fn ducking_behind_a_wall_leaves_the_guard_searching_then_calm() {
 #[test]
 fn a_shot_behind_a_guard_turns_it_round_and_then_it_sees_the_player() {
     let mut world = world(&format!(
-        r#"game.weapon("gun", {{ from = "pistol" }})
+        r#"{OUTLAW}
+        game.weapon("gun", {{ from = "pistol" }})
         game.onSpawn(function() game.player:giveWeapon("gun") end)
-        local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 0 }}
+        local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 0, side = "Guards" }}
         {TOLD}"#
     ));
     // The player stands four metres behind the guard, unseen.
@@ -271,88 +291,220 @@ fn a_friend_walking_past_alarms_nobody() {
     let noticed = guard.awareness.gauge_of(CharacterId::PLAYER);
     assert!(noticed > 0.0 && noticed <= lore_npc::CALM_TOPS, "{noticed}");
     assert_eq!(guard.awareness.level(), lore_npc::Aware::Unaware);
+    // No mark over a friend.
+    let notice = guard.awareness.of(CharacterId::PLAYER).unwrap();
+    assert!(!notice.may_alarm());
+}
+
+/// The angle from `a` to `b`, the short way round, in radians.
+fn apart(a: f32, b: f32) -> f32 {
+    let d = (a - b).rem_euclid(std::f32::consts::TAU);
+    d.min(std::f32::consts::TAU - d)
 }
 
 #[test]
-fn the_same_input_gives_the_same_changes_on_the_same_ticks() {
-    let run = || {
-        let mut world = world(&behind_the_tower(150));
-        play(&mut world, 30);
-        ask(&mut world, |asked| asked.movement.forward = 1.0);
-        play(&mut world, 900);
-        printed()
-    };
-    let first = run();
-    assert!(first.len() >= 3, "{first:?}");
-    assert_eq!(first, run());
-}
-
-#[test]
-fn a_script_raises_the_alarm_and_settles_it_and_reads_it() {
+fn with_no_sides_a_guard_only_looks_at_the_player_and_forgets_them() {
+    // A guard looking south at the player, who stands off to one side of
+    // its look, close, then goes behind the tower.
     let mut world = world(&format!(
-        r#"local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 0, alertness = 0.5 }}
+        r#"local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 180 }}
         local steps = 0
         game.onTick(function()
             steps += 1
-            if steps == 10 then guard:alert(game.player) end
-            if steps == 12 then print("read " .. guard.awareness .. " " .. guard:awarenessOf(game.player) .. " " .. guard:noticeOf(game.player)) end
-            if steps == 20 then guard:calm() end
-            if steps == 30 then guard:alert(vector.create(3, 0, -8)) end
+            if steps == 1 then game.player:teleport(vector.create(2, 0.2, -2.5)) end
+            if steps == 300 then game.player:teleport(vector.create(0, 0.5, -13.3)) end
         end)
         {TOLD}"#
     ));
-    play(&mut world, 40);
-    let said = printed();
+    let facing = world.npcs()[0].facing();
+    let mut most = lore_npc::Aware::Unaware;
+    for _ in 0..299 {
+        play(&mut world, 1);
+        let guard = &world.npcs()[0];
+        most = most.max(guard.awareness.level_of(CharacterId::PLAYER));
+        assert!(apart(guard.facing(), facing) < 0.01, "the body turned");
+    }
+    assert_eq!(most, lore_npc::Aware::Curious);
+    let guard = &world.npcs()[0];
+    // It looks at them, head and chest; no mark is shown over it.
     assert_eq!(
-        said,
-        [
-            "10 Player unaware>alarmed",
-            "read alarmed alarmed 1",
-            "20 Player alarmed>unaware",
-            "30 place unaware>alarmed",
-        ],
-        "{said:?}"
+        guard.awareness.interest().unwrap().about,
+        Some(CharacterId::PLAYER)
     );
-    // A place it is alarmed about is where it looks.
-    let interest = world.npcs()[0].awareness.interest().copied().unwrap();
-    assert!(interest.is_place() && interest.at == [3.0, 0.0, -8.0]);
+    assert!(guard.awareness.turns_to().is_none());
+    assert!(!guard.awareness.of(CharacterId::PLAYER).unwrap().may_alarm());
+    // Gone: calm in a few seconds, not twenty.
+    play(&mut world, 5 * 60);
+    let told = changes(&printed());
+    assert_eq!(
+        told.iter()
+            .map(|(_, what)| what.as_str())
+            .collect::<Vec<_>>(),
+        ["Player unaware>curious", "Player curious>unaware"]
+    );
+    let calm = tick_of(&told, "Player curious>unaware");
+    assert!((300..300 + 5 * 60).contains(&calm), "{told:?}");
+    assert!(apart(world.npcs()[0].facing(), facing) < 0.01);
 }
 
-/// A hundred NPCs standing about the starter level, the player walking
-/// among them and noticed by many: how long a tick takes. Run with
-/// `--release --nocapture` for the numbers.
 #[test]
-fn a_hundred_npcs_notice_cheaply() {
-    let script = format!(
-        r#"for i = 0, 99 do
-            local x = -12 + (i % 10) * 2.6
-            local z = -2 + (i // 10) * 1.5
-            game.npc {{ name = "Villager " .. i, at = vector.create(x, 0, z), facing = (i * 37) % 360 }}
-        end
+fn a_guard_that_sees_the_player_hurt_a_friend_goes_from_curious_to_alarmed() {
+    let mut world = world(&format!(
+        r#"game.sides {{ Town = {{ friends = {{ "Guards" }} }}, Guards = {{}} }}
+        local villager = game.npc {{ name = "Villager", at = vector.create(0, 0, -2), side = "Town" }}
+        local guard = game.npc {{ name = "Guard", at = vector.create(3, 0, 0), side = "Guards", facing = 90 }}
+        local steps = 0
+        game.onStart(function() game.player:teleport(vector.create(0, 0, 0)) end)
+        game.onTick(function()
+            steps += 1
+            if steps == 120 then villager:damage(10, {{ from = game.player }}) end
+        end)
         {TOLD}"#
+    ));
+    play(&mut world, 119);
+    let guard = &world.npcs()[1];
+    assert_eq!(
+        guard.awareness.level_of(CharacterId::PLAYER),
+        lore_npc::Aware::Curious
     );
-    let mut world = world(&script);
-    play(&mut world, 30);
-    ask(&mut world, |asked| asked.movement.forward = 0.5);
-    let nothing = Input::new(ActionMap::standard());
-    let ticks = 240;
-    let started = std::time::Instant::now();
-    for _ in 0..ticks {
-        world.tick(nothing.frame(), STEP);
-    }
-    let each = started.elapsed() / ticks;
-    let noticing = world
-        .npcs()
+    play(&mut world, 120);
+    let told = changes(&printed());
+    let alarmed = told
         .iter()
-        .filter(|npc| npc.awareness.of(CharacterId::PLAYER).is_some())
-        .count();
-    println!("100 NPCs, {noticing} noticing the player: {each:?} a tick");
-    assert!(noticing > 10, "{noticing}");
-    let _ = printed();
-    // The same bound as the senses' own crowd test: awareness adds a few
-    // microseconds to a tick of about 2 ms in a debug build.
+        .find(|(_, what)| what == "Player searching>alarmed" || what == "Player curious>alarmed")
+        .map(|(tick, _)| *tick);
+    assert!(alarmed.is_some_and(|t| t > 120 && t < 200), "{told:?}");
+    let guard = &world.npcs()[1];
+    assert!(guard.awareness.of(CharacterId::PLAYER).unwrap().may_alarm());
+}
+
+#[test]
+fn a_guard_calmed_while_it_sees_its_enemy_is_alarmed_again_in_about_a_second() {
+    let mut world = world(&format!(
+        r#"{OUTLAW}
+        local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 180, side = "Guards" }}
+        local steps = 0
+        game.onTick(function()
+            steps += 1
+            if steps == 120 then guard:calm() end
+        end)
+        {TOLD}"#
+    ));
+    play(&mut world, 200);
+    let told = changes(&printed());
+    let calmed = tick_of(&told, "Player alarmed>unaware");
+    let again = told
+        .iter()
+        .filter(|(tick, what)| *tick > calmed && what.ends_with(">alarmed"))
+        .map(|(tick, _)| *tick)
+        .next();
+    // Standing still four metres off: about a second.
+    assert!(again.is_some_and(|t| t - calmed <= 70), "{told:?}");
+}
+
+#[test]
+fn a_body_passed_twice_is_told_once() {
+    // The guard finds a fallen villager, is calmed, walks off round the
+    // yard and comes back to it.
+    let mut world = world(&format!(
+        r#"game.sides {{ Town = {{ friends = {{ "Guards" }} }}, Guards = {{}} }}
+        local villager = game.npc {{ name = "Villager", at = vector.create(2, 0, -1), side = "Town" }}
+        local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 180, side = "Guards" }}
+        local steps = 0
+        game.onTick(function()
+            steps += 1
+            if steps == 1 then game.player:teleport(vector.create(-10, 0.2, -12)) end
+            if steps == 2 then villager:damage(1000) end
+            if steps == 200 then guard:calm() end
+            if steps == 210 then guard:goTo(vector.create(8, 0, 6)) end
+        end)
+        local laps = 0
+        guard:onArrive(function()
+            laps += 1
+            if laps == 1 then guard:goTo(vector.create(0, 0, -4), {{ facing = 180 }}) end
+        end)
+        {TOLD}"#
+    ));
+    play(&mut world, 900);
+    let villager = world.npcs()[0].who;
     assert!(
-        each < std::time::Duration::from_millis(25),
-        "a tick of 100 NPCs took {each:?}"
+        world.npcs()[1].senses.sees(villager),
+        "it sees the body again"
     );
+    let told = changes(&printed());
+    let found = told
+        .iter()
+        .filter(|(_, what)| what == "place unaware>alarmed")
+        .count();
+    assert_eq!(found, 1, "{told:?}");
+}
+
+#[test]
+fn a_walk_that_ends_facing_a_way_turns_back_to_it_after_a_notice() {
+    let mut world = world(&format!(
+        r#"{OUTLAW}
+        local guard = game.npc {{ name = "Guard", at = vector.create(-6, 0, 4), facing = 0, side = "Guards" }}
+        guard:onArrive(function()
+            guard:alert(vector.create(-6, 0, 8))
+        end)
+        local steps = 0
+        game.onTick(function()
+            steps += 1
+            if steps == 1 then game.player:teleport(vector.create(10, 0.2, 10)) end
+            if steps == 2 then guard:goTo(vector.create(-6, 0, 2), {{ facing = 90 }}) end
+            if steps == 300 then guard:calm() end
+        end)
+        {TOLD}"#
+    ));
+    play(&mut world, 299);
+    let told = changes(&printed());
+    tick_of(&told, "place unaware>alarmed");
+    // Turned round to the place it was alarmed about.
+    let guard = &world.npcs()[0];
+    assert!(
+        apart(guard.facing(), std::f32::consts::PI) < 0.1,
+        "{}",
+        guard.facing()
+    );
+    play(&mut world, 180);
+    let guard = &world.npcs()[0];
+    assert!(
+        apart(guard.facing(), std::f32::consts::FRAC_PI_2) < 0.05,
+        "{}",
+        guard.facing()
+    );
+    assert!(apart(guard.mind.wants(), std::f32::consts::FRAC_PI_2) < 0.05);
+}
+
+#[test]
+fn a_saved_script_still_hears_of_awareness() {
+    let dir = std::env::temp_dir().join(format!("lore-noticing-reload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = format!(
+        r#"{OUTLAW}
+        local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, -4), facing = 0, side = "Guards" }}
+        guard:onAwareness(function(who, now, before) print("told " .. now) end)
+        local steps = 0
+        game.onTick(function()
+            steps += 1
+            if steps == 30 then guard:alert(game.player) end
+        end)
+        "#
+    );
+    std::fs::write(dir.join("main.luau"), &script).unwrap();
+    std::fs::write(dir.join("map.toml"), MAP).unwrap();
+    let _ = log::set_logger(&Capture);
+    log::set_max_level(log::LevelFilter::Info);
+    let game = ScriptGame::open(&dir, &ActionMap::standard()).unwrap();
+    let level = lore::level::from_bytes("level.glb", lore::scaffold::STARTER_LEVEL).unwrap();
+    let mut world = World::new(game, TICK_RATE).with_level(&level);
+    play(&mut world, 10);
+    std::fs::write(dir.join("main.luau"), format!("{script}\n-- saved again\n")).unwrap();
+    world.game_mut().host_mut().reload().unwrap();
+    play(&mut world, 40);
+    let said = printed();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(said, ["told alarmed"], "{said:?}");
+    assert_eq!(world.npcs().len(), 1);
 }

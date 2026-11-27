@@ -6,7 +6,7 @@
 //! toward what it is curious about. Last, each NPC's awareness is handed to
 //! the script host for `npc:awarenessOf` and the marks to read.
 
-use lore_npc::{Change, Feeling, Pace, Sides, facing_toward, turn_toward};
+use lore_npc::{Change, Pace, facing_toward, turn_toward};
 use lore_script::{AwareAsk, CharacterId, ScriptHost};
 
 use super::npcs::{Npc, Npcs};
@@ -36,7 +36,8 @@ pub(crate) struct Noticing {
 /// How a standing NPC is turning to what it noticed.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct Turning {
-    /// The way it faced before it first turned to something, to turn back
+    /// The way its mind wanted it to face before it first turned to
+    /// something (where a walk's end asked it to face, say), to turn back
     /// to once it is calm.
     rest: Option<f32>,
     /// Whether it is turning now.
@@ -105,8 +106,8 @@ impl Noticing {
                     player: Some(CharacterId::PLAYER),
                     player_scale: world.notice,
                 };
-                let wary = |them: CharacterId| wary(&sides, who, them);
-                (npc.awareness).step(&npc.senses, &pace, wary, |change| told.push((who, change)));
+                let feels = |them: CharacterId| sides.feels(who.number(), them.number());
+                (npc.awareness).step(&npc.senses, &pace, feels, |change| told.push((who, change)));
                 // One with somewhere to go faces the way it walks; it turns
                 // to what it noticed again from where it ends up.
                 if npc.mind.walk.goal().is_some() {
@@ -128,33 +129,24 @@ impl Noticing {
     }
 }
 
-/// Whether `them` may alarm `me`: an enemy, and the player unless a
-/// friend. A friend, and a neutral NPC passing by, is noticed but never
-/// alarming, so a town does not alarm itself; whether one alarmed about is
-/// an enemy is the rules' question (#57), asked of the same table.
-fn wary(sides: &Sides, me: CharacterId, them: CharacterId) -> bool {
-    match sides.feels(me.number(), them.number()) {
-        Feeling::Enemy => true,
-        Feeling::Neutral => them == CharacterId::PLAYER,
-        Feeling::Friend => false,
-    }
-}
-
-/// Turns `npc`'s body, as it stands, toward what it is curious about, at a
-/// person's turning speed, so its sight finds what it heard; and back the
-/// way it faced once it is calm. Head and chest turn first, in the picture
-/// ([`crate::npc_figures`]); the body follows when what it noticed is
-/// further round than they reach alone.
+/// Turns `npc`'s body, as it stands, toward what it is curious about that
+/// may alarm it (an enemy, a place: [`lore_npc::Awareness::turns_to`]), at
+/// a person's turning speed, so its sight finds what it heard; and back the
+/// way its mind wanted to face once it is calm. Head and chest turn first,
+/// in the picture ([`crate::npc_figures`]); the body follows when what it
+/// noticed is further round than they reach alone. A neutral it is curious
+/// about is only looked at, head and chest: the body stays as it is.
 ///
 /// Only for an NPC with nowhere to go: one walking faces the way it goes
 /// (walking writes `mind.facing` itself), so the tick calls this for the
 /// others and forgets the turn of one that sets off.
 pub(crate) fn turn_to_notice(npc: &mut Npc, seconds: f32) {
     let facing = npc.mind.facing;
-    let goal = match npc.awareness.interest() {
+    let interest = npc.awareness.turns_to();
+    let goal = match interest {
         Some(notice) => {
             if npc.turning.rest.is_none() {
-                npc.turning.rest = Some(facing);
+                npc.turning.rest = Some(npc.mind.wants());
             }
             facing_toward(npc.body.position, notice.at)
         }
@@ -164,7 +156,7 @@ pub(crate) fn turn_to_notice(npc: &mut Npc, seconds: f32) {
         npc.turning.on = false;
         return;
     };
-    let calm = npc.awareness.interest().is_none();
+    let calm = interest.is_none();
     let off = libm::fabsf(turn_toward(facing, goal, f32::INFINITY) - facing);
     let off = off.min(std::f32::consts::TAU - off);
     if off > TURN_FROM || (calm && off > TURNED) {

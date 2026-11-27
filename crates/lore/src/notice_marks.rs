@@ -5,7 +5,10 @@
 //! Each mark is an upright pill over the NPC's head that fills from the
 //! bottom as the NPC notices the player more, with a "?" over it once the
 //! NPC is searching and a "!" once alarmed: the fill and the sign say it,
-//! the colour (white, amber, red) only helps. One whose NPC is off the
+//! the colour (white, amber, red) only helps. Only an NPC that counts the
+//! player an enemy has one ([`lore_npc::Notice::may_alarm`]): one that is
+//! merely curious about a stranger, or notices a friend, is no threat to
+//! hint at. One whose NPC is off the
 //! screen sits at the edge of the screen in its direction. At most
 //! [`MOST_MARKS`] are shown, the fullest first.
 //!
@@ -107,7 +110,7 @@ impl NoticeMarks {
             let Some(notice) = aware.of(CharacterId::PLAYER) else {
                 return;
             };
-            if notice.gauge < SHOWN_FROM {
+            if notice.gauge < SHOWN_FROM || !notice.may_alarm() {
                 return;
             }
             let Some(feet) = host.character_position(npc) else {
