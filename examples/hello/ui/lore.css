@@ -258,7 +258,7 @@ input:focus, select:focus { outline: 3px solid var(--ink); outline-offset: 2px; 
 .stat-row { display: flex; flex-direction: row; justify-content: space-between; padding: 8px 0px; border-bottom: var(--line) solid var(--ink-faint); }
 
 .slot { width: 96px; height: 96px; display: flex; justify-content: center; align-items: center; border: var(--line) solid var(--ink-dim); background-color: var(--ink-faint); color: var(--ink-dim); }
-.slot.selected { border-color: var(--ink); color: var(--ink); box-shadow: 0 0 16px var(--glow); }
+.slot.selected { border-color: var(--ink); color: var(--ink); box-shadow: 0 0 16px var(--glow), inset 0 0 12px var(--glow); }
 
 .divider { height: 2px; background-color: var(--ink-dim); margin: 10px 0px; }
 .badge { padding: 0px 8px; background-color: var(--ink); color: var(--on-ink); font-size: 16px; text-shadow: none; }

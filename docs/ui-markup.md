@@ -689,4 +689,4 @@ They are kept as warnings with the same shape.
 So you do not look for it: no `<table>`, `<ul>`, `<a>`, `<form>`, `<textarea>`, `<canvas>` or `<script>`
 (behaviour is Luau, named by `onclick` and friends); no `grid`, `float`, inline-block or tables;
 no `@media`, `@import` or `@font-face`; no attribute selectors, sibling selectors or `::before`;
-no `repeating-` gradients; no oval corners (a percentage corner on a box that is not square is drawn round, #612); no text selection, no multi-line text boxes; no right-to-left text.
+no `repeating-` gradients; no two-value corners (`40px / 20px`: a percentage gives an oval); no text selection, no multi-line text boxes; no right-to-left text.
