@@ -339,7 +339,7 @@ const _: () = assert!(std::mem::size_of::<Noise>() <= 56);
 /// Works out when the player's feet come down. A new one has walked
 /// nowhere yet: start again with one when the player is put somewhere new,
 /// so the next step is counted from there.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct Walking {
     feet: Footsteps,
 }
@@ -417,7 +417,9 @@ pub(crate) fn play(
         play.pitch = (play.pitch * noise.pitch).clamp(0.25, 4.0);
     }
     play.range = noise.range;
-    if noise.kind.is_at_a_place() {
+    // What someone else made is heard from where they made it.
+    let by_another = noise.by.is_some_and(|by| by != CharacterId::PLAYER);
+    if noise.kind.is_at_a_place() || by_another {
         play.place = lore_audio::Place::At(noise.position);
     }
     // A noise of the world keeps the world's time: it waits while the

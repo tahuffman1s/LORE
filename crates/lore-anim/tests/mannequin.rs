@@ -51,13 +51,13 @@ fn gaits_are_as_fast_as_people_walk_and_run() {
     let speeds: Vec<f32> = body.gait_speeds().collect();
     println!("measured gait speeds: {speeds:?}");
     assert_eq!(speeds.len(), 3);
-    // Measured from where the planted foot goes. People stroll at 0.7 to
-    // 1.0 m/s and walk briskly at 1.4; jog at 2 to 4; sprint from 3.5 up.
-    // The mannequin's clips are a relaxed walk (0.85), a jog (2.5) and a
-    // stylised sprint (3.6).
+    // Measured from how fast the ball of the planted foot goes back under
+    // the body. The mannequin's walk is a relaxed one (0.9 m/s); its run
+    // and sprint are stylised, with short footfalls and long flights, so
+    // their planted feet go back at 5.9 and 8.9 m/s.
     assert!((0.7..2.0).contains(&speeds[0]), "walk {}", speeds[0]);
-    assert!((2.0..4.5).contains(&speeds[1]), "run {}", speeds[1]);
-    assert!((3.0..9.0).contains(&speeds[2]), "sprint {}", speeds[2]);
+    assert!((4.0..7.5).contains(&speeds[1]), "run {}", speeds[1]);
+    assert!((6.0..11.0).contains(&speeds[2]), "sprint {}", speeds[2]);
     assert!(speeds[0] < speeds[1] && speeds[1] < speeds[2]);
 }
 

@@ -56,9 +56,13 @@ game.onTick(function()
 end)
 
 -- Someone to meet: a guard beside the arch, who looks at you as you pass.
--- Walk up to her and press E (or Y on a gamepad) to talk.
+-- Walk up to her and press E (or Y on a gamepad) to talk: she shows you the way.
 local guard = game.npc { name = "Guard", at = vector.create(1.8, 0, 5.5), facing = 90 }
-guard:onUse(function() print("Guard: The tower? Straight on, through the arch.") end)
+guard:onUse(function()
+    print("Guard: The tower? Follow me.")
+    guard:goTo(vector.create(1.5, 0, -8.5))
+end)
+guard:onArrive(function() print("Guard: There it is.") end)
 
 -- How the game is seen: "first" from the player's eyes, or "third" from
 -- over their shoulder. The player can switch with F, or the View button on

@@ -538,6 +538,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut sensing = 0;
     let mut carrying = false;
     let mut slides = 0;
+    let mut walks = 0;
     let mut turned = 0;
     let mut feelings = 0;
     let mut hours = 0;
@@ -718,6 +719,9 @@ fn check(folder: &Path) -> Result<(), String> {
         // and to have found the player in its way.
         slides = game.host_mut().pretend_slides();
         game.tick(input.tick(), step);
+        // And each NPC the script listens to is said to have got where it
+        // was walking, and to have found it could not.
+        walks = game.host_mut().pretend_npc_walks();
         // And the difficulty is said to be turned, so each
         // game.difficulty.onChange function runs.
         turned = game.host_mut().pretend_difficulty_change();
@@ -892,6 +896,14 @@ fn check(folder: &Path) -> Result<(), String> {
             if slides == 1 { "was" } else { "were" }
         );
     }
+    if walks > 0 {
+        println!(
+            "{walks} of the NPCs the script sends walking (npc:onArrive, npc:onCannotReach) \
+             {} said to have arrived, and to have found something in the way, with no errors. \
+             Nobody really walked.",
+            if walks == 1 { "was" } else { "were" }
+        );
+    }
     if turned > 0 {
         println!(
             "The difficulty was said to be turned one step, so {} game.difficulty.onChange \
@@ -1020,6 +1032,10 @@ fn check(folder: &Path) -> Result<(), String> {
             "{}",
             cli::walked(&lore::world::try_walking(&level, game.map()))
         );
+    }
+    // A place an NPC is sent to by name that the map does not have.
+    for warning in cli::unknown_places(folder, game.map()) {
+        eprintln!("Warning: {warning}");
     }
     if shaders.drawn + shaders.from_folder.len() > 0 {
         let on = match shaders.drawn {

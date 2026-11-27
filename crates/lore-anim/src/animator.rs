@@ -152,6 +152,11 @@ pub struct Body {
     facing: f32,
     /// For each clip, when it can hit and with what, if it strikes at all.
     strikes: Vec<Option<Strike>>,
+    /// For each clip, where in its cycle (0 to 1) the right foot comes
+    /// down: the gaits are played that far on from the shared stride, so
+    /// every gait's feet come down together and a walk blends into a run
+    /// foot with foot. 0 for clips that are not gaits.
+    offsets: Vec<f32>,
 }
 
 /// When a clip can hit, and with which bone: a sword swing's or a punch's
@@ -228,6 +233,17 @@ pub mod names {
 /// never touch the ground): a person's usual walk, run and sprint.
 const USUAL_SPEEDS: [f32; 3] = [1.4, 3.5, 6.0];
 
+/// How far above as low as a foot goes in a clip it still counts as on the
+/// ground, in metres, when measuring how fast the clip carries the body.
+const ON_GROUND: f32 = 0.015;
+
+/// Up to this speed, in metres a second, the slowest gait (a walk) plays
+/// alone, its stride stretched to the ground covered, before it blends
+/// into the next. A walk and a run keep their feet on the ground for very
+/// different shares of a stride, so a blend of the two slides the planted
+/// foot; a person walks briskly at up to about this pace.
+const WALK_ALONE: f32 = 1.6;
+
 /// The speed a crouching walk is taken to have when it cannot be measured.
 const USUAL_CROUCH_SPEED: f32 = 1.0;
 
@@ -278,6 +294,7 @@ impl Body {
             upper,
             facing: 1.0,
             strikes: Vec::new(),
+            offsets: Vec::new(),
         };
         body.facing = body.find_facing();
         body.strikes = (0..body.clips.len())
@@ -306,7 +323,20 @@ impl Body {
         standing.sort_by(|a, b| a.speed.total_cmp(&b.speed));
         body.standing = standing;
         body.crouching = crouch.into_iter().collect();
+        body.offsets = (body.clips.iter())
+            .map(|clip| {
+                (clip.markers.iter())
+                    .find(|m| m.name == "right_foot_down")
+                    .filter(|_| clip.duration > 0.0)
+                    .map_or(0.0, |m| (m.time / clip.duration).rem_euclid(1.0))
+            })
+            .collect();
         body
+    }
+
+    /// Where in clip `clip`'s cycle (0 to 1) its right foot comes down.
+    fn offset(&self, clip: u32) -> f32 {
+        self.offsets.get(clip as usize).copied().unwrap_or(0.0)
     }
 
     /// Which way the body faces in its own space, along Z: 1 for +Z (as
@@ -466,11 +496,15 @@ impl Body {
     /// How fast an on-the-spot clip would carry the body across the ground:
     /// the speed the planted foot slides back under the hips.
     ///
-    /// Each key, the lower foot is taken to be the planted one; its travel
-    /// backwards over the keys it is planted, over the time, is the speed.
-    /// 0 when the body has no feet by a known name or they never touch.
+    /// Each key, the lower sole (the ball of the foot, see
+    /// [`Body::soles`]) is taken to be the planted one, if it is within
+    /// [`ON_GROUND`] of as low as a sole goes in the clip; its travel
+    /// backwards over the keys it is planted, over that time, is the speed.
+    /// Keys with both feet off the ground (a run's flight) say nothing of
+    /// it, nor does a heel coming down or a foot rolling off its toes. 0
+    /// when the body has no feet by a known name or they never touch.
     fn ground_speed(&self, clip: usize) -> f32 {
-        let Some((left, right)) = self.feet() else {
+        let Some((left, right)) = self.soles() else {
             return 0.0;
         };
         let clip_data = &self.clips[clip];
@@ -481,25 +515,33 @@ impl Body {
         }
         let mut pose = self.skeleton.rest().to_vec();
         let mut placed = vec![IDENTITY; self.skeleton.len()];
-        let mut previous: Option<([f32; 3], [f32; 3])> = None;
+        let feet: Vec<([f32; 3], [f32; 3])> = (0..frames)
+            .map(|frame| {
+                pose.copy_from_slice(self.skeleton.rest());
+                clip_data.sample(&self.bindings[clip], frame as f32 * step, &mut pose);
+                self.skeleton.place(&pose, &mut placed);
+                (origin(&placed[left]), origin(&placed[right]))
+            })
+            .collect();
+        let lowest = feet
+            .iter()
+            .map(|(l, r)| l[1].min(r[1]))
+            .fold(f32::INFINITY, f32::min);
         let (mut travel, mut time) = (0.0f32, 0.0f32);
-        for frame in 0..frames {
-            pose.copy_from_slice(self.skeleton.rest());
-            clip_data.sample(&self.bindings[clip], frame as f32 * step, &mut pose);
-            self.skeleton.place(&pose, &mut placed);
-            let feet = (origin(&placed[left]), origin(&placed[right]));
-            if let Some((was_left, was_right)) = previous {
-                // The foot lower over both keys is the one on the ground.
-                let (now, was) = if feet.0[1] + was_left[1] <= feet.1[1] + was_right[1] {
-                    (feet.0, was_left)
-                } else {
-                    (feet.1, was_right)
-                };
-                let (dx, dz) = (now[0] - was[0], now[2] - was[2]);
-                travel += (dx * dx + dz * dz).sqrt();
-                time += step;
+        for pair in feet.windows(2) {
+            let ((was_left, was_right), (now_left, now_right)) = (pair[0], pair[1]);
+            // The foot lower over both keys is the one on the ground.
+            let (now, was) = if now_left[1] + was_left[1] <= now_right[1] + was_right[1] {
+                (now_left, was_left)
+            } else {
+                (now_right, was_right)
+            };
+            if now[1].max(was[1]) > lowest + ON_GROUND {
+                continue;
             }
-            previous = Some(feet);
+            let (dx, dz) = (now[0] - was[0], now[2] - was[2]);
+            travel += (dx * dx + dz * dz).sqrt();
+            time += step;
         }
         // The skeleton's own scale (an armature exported in centimetres)
         // is in `placed`, so this is in the model's metres.
@@ -550,6 +592,20 @@ impl Body {
             }
             self.clips[clip].markers.extend(markers);
         }
+    }
+
+    /// What of each foot is on the ground while it is planted: the balls
+    /// of the feet (the toe bones), else the feet themselves.
+    fn soles(&self) -> Option<(usize, usize)> {
+        [
+            ("ball_l", "ball_r"),
+            ("LeftToeBase", "RightToeBase"),
+            ("toe.L", "toe.R"),
+            ("mixamorig:LeftToeBase", "mixamorig:RightToeBase"),
+        ]
+        .iter()
+        .find_map(|(l, r)| Some((self.skeleton.find(l)?, self.skeleton.find(r)?)))
+        .or_else(|| self.feet())
     }
 
     /// The left and right foot bones, by the names LORE, Blender and Mixamo use.
@@ -607,8 +663,9 @@ pub struct Animator {
     state: State,
     /// Seconds since the state began.
     state_time: f32,
-    /// How far through a stride the gaits are, 0 to 1. Kept in common so a
-    /// walk blends into a run with the feet together.
+    /// How far through a stride the gaits are, 0 to 1, from the right foot
+    /// coming down. Kept in common so a walk blends into a run with the
+    /// feet together.
     phase: f32,
     /// The idle's own clock.
     idle_time: f32,
@@ -791,9 +848,12 @@ impl Animator {
                 let main = if share < 0.5 { a } else { b };
                 if let Some(clip) = main.clips[0] {
                     let c = &body.clips[clip as usize];
-                    c.markers_passed(before * c.duration, self.phase * c.duration, |m| {
-                        heard(clip, m);
-                    });
+                    let offset = body.offset(clip);
+                    c.markers_passed(
+                        (before + offset) * c.duration,
+                        (self.phase + offset) * c.duration,
+                        |m| heard(clip, m),
+                    );
                 }
             }
             self.phase -= self.phase.floor();
@@ -1009,7 +1069,7 @@ impl Animator {
         };
         // From idle to the slowest gait over its first half: a slow shuffle
         // is mostly a short-stepped walk.
-        let moving = smooth((self.speed / (a.speed * 0.5)).min(1.0));
+        let moving = (self.speed / a.speed).min(1.0);
         if moving <= 0.0 {
             return;
         }
@@ -1035,9 +1095,11 @@ impl Animator {
                 // so far keeps every share right.
                 let total = (1.0 - moving) + moving * laid;
                 let c = &body.clips[clip as usize];
+                // Each gait from where its right foot comes down.
+                let phase = (self.phase + body.offset(clip)).fract();
                 c.sample_mixed(
                     &body.bindings[clip as usize],
-                    self.phase * c.duration,
+                    phase * c.duration,
                     if total > 0.0 { moving * w / total } else { 1.0 },
                     None,
                     scratch,
@@ -1090,15 +1152,21 @@ fn layer_of(_body: &Body, playing: &Playing) -> Layer {
 /// both are the fastest.
 fn gait_pair(gaits: &[Gait], speed: f32) -> Option<(&Gait, &Gait, f32)> {
     let first = gaits.first()?;
-    if speed <= first.speed {
+    // The slowest gait alone, its stride stretched, up to a brisk walk.
+    if speed <= first.speed.max(WALK_ALONE) {
         return Some((first, first, 0.0));
     }
-    for pair in gaits.windows(2) {
+    for (k, pair) in gaits.windows(2).enumerate() {
         let (a, b) = (&pair[0], &pair[1]);
         if speed <= b.speed {
-            let span = b.speed - a.speed;
+            let from = if k == 0 {
+                a.speed.max(WALK_ALONE)
+            } else {
+                a.speed
+            };
+            let span = b.speed - from;
             let share = if span > 0.0 {
-                (speed - a.speed) / span
+                ((speed - from) / span).clamp(0.0, 1.0)
             } else {
                 1.0
             };

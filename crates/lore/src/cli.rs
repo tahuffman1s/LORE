@@ -101,6 +101,11 @@ pub const CHECK_SEED: u64 = 1;
 /// two ticks) and as a fast one does (several).
 const UNEVEN_PICTURES: [u32; 7] = [0, 3, 1, 0, 0, 7, 2];
 
+/// Held by [`paced`], which turns the log off while it runs, and by tests
+/// that read the log, so the two never run at once.
+#[cfg(test)]
+pub(crate) static LOG_QUIET: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Plays the start of a game four times with no window and says whether
 /// its rules depend on how often a picture is drawn: with one picture
 /// after every tick, the same again, with pictures at an uneven pace, and
@@ -119,6 +124,11 @@ const UNEVEN_PICTURES: [u32; 7] = [0, 3, 1, 0, 0, 7, 2];
 /// after it included. The caller gives every run the same dice
 /// ([`CHECK_SEED`]), so a game that rolls them is judged like any other.
 pub fn paced(mut open: impl FnMut() -> Option<ScriptGame>, actions: &ActionMap) -> Option<Paced> {
+    // Tests that read the log wait while this keeps it quiet.
+    #[cfg(test)]
+    let _quiet_log = LOG_QUIET
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     /// Makes the log as loud again as it was, however this ends.
     struct Quiet(log::LevelFilter);
     impl Drop for Quiet {
@@ -556,6 +566,99 @@ fn holds_function(code: &str, name: &str) -> bool {
                 .strip_prefix(name)
                 .is_some_and(|rest| rest.trim_start().starts_with('('))
     })
+}
+
+/// Each place a script in `folder` sends an NPC to by name
+/// (`npc:goTo("Gate")`) that nothing in `map` is called: a warning for each,
+/// saying where it is written and what the map has instead. A name built
+/// as the game runs is not looked at.
+#[must_use]
+pub fn unknown_places(folder: &Path, map: &crate::map::Map) -> Vec<String> {
+    let mut files = Vec::new();
+    scripts_in(folder, folder, &mut files, 0);
+    files.sort();
+    let names: Vec<&str> = (map.entities().iter())
+        .map(|entity| {
+            if entity.name.is_empty() {
+                entity.id.as_str()
+            } else {
+                entity.name.as_str()
+            }
+        })
+        .collect();
+    let known = |wanted: &str| {
+        map.entities().iter().any(|entity| {
+            entity.name == wanted
+                || entity.id == wanted
+                || (!entity.name.is_empty() && entity.name.eq_ignore_ascii_case(wanted))
+        })
+    };
+    let mut said = Vec::new();
+    for (shown, path) in files {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (line, words) in (1..).zip(text.lines()) {
+            let code = words.split("--").next().unwrap_or("");
+            for (at, _) in code.match_indices("goTo(") {
+                let rest = code[at + 5..].trim_start();
+                let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+                    continue;
+                };
+                let Some(name) = rest[1..].split(quote).next() else {
+                    continue;
+                };
+                if known(name.trim()) {
+                    continue;
+                }
+                let mut warning = format!(
+                    "{shown} line {line}: goTo(\"{name}\") sends an NPC to a place that is not \
+                     in {}, so it would stop the script with an error when that line runs.",
+                    crate::map::MAP_FILE
+                );
+                if let Some(near) = lore_script::closest(name, names.iter().copied()) {
+                    warning.push_str(&format!(" Did you mean \"{near}\"?"));
+                }
+                warning.push_str(
+                    " Place a marker of type \"place\" with that name in the level (`lore \
+                     edit`), or use a name the map has.",
+                );
+                said.push(warning);
+            }
+        }
+    }
+    said
+}
+
+/// Adds the `.luau` files in `dir` (inside the game's `folder`) and the
+/// folders in it, as (how to show it, where it is), to `files`; hidden
+/// folders and those a game is packed into are passed over.
+fn scripts_in(
+    folder: &Path,
+    dir: &Path,
+    files: &mut Vec<(String, std::path::PathBuf)>,
+    depth: u32,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name == "dist" || name == "target" {
+            continue;
+        }
+        if path.is_dir() && depth < 4 {
+            scripts_in(folder, &path, files, depth + 1);
+        } else if path.extension().is_some_and(|ext| ext == "luau") {
+            let shown = path
+                .strip_prefix(folder)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.push((shown, path));
+        }
+    }
 }
 
 /// What `lore check` says after trying a level out for walking: that the
@@ -1116,6 +1219,39 @@ pub fn quoted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_place_an_npc_is_sent_to_that_the_map_lacks_is_warned_of() {
+        let folder = std::env::temp_dir().join(format!("lore-cli-{}-places", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(folder.join("people")).unwrap();
+        std::fs::write(
+            folder.join("main.luau"),
+            "local guard = game.npc { name = \"Guard\", at = \"Gate\" }\n\
+             guard:goTo(\"gate\")\nguard:goTo( 'Gaet' ) -- guard:goTo(\"Nowhere\")\n\
+             guard:goTo(somewhere)\n",
+        )
+        .unwrap();
+        std::fs::write(folder.join("people/smith.luau"), "smith:goTo(\"Forge\")\n").unwrap();
+        let map = crate::map::Map::parse(
+            "map.toml",
+            "version = 1\n[[entity]]\nid = \"g\"\ntype = \"place\"\nname = \"Gate\"\n\
+             position = [0.0, 0.0, 0.0]\n",
+        )
+        .unwrap();
+        let said = unknown_places(&folder, &map);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(
+            said[0].starts_with("main.luau line 3: goTo(\"Gaet\") sends an NPC to a place")
+                && said[0].contains("Did you mean \"Gate\"?"),
+            "{said:?}"
+        );
+        assert!(
+            said[1].starts_with("people/smith.luau line 1: goTo(\"Forge\")"),
+            "{said:?}"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 
     /// What [`paced`] says of a game with this script.
     fn paced_with(script: &str) -> Paced {
